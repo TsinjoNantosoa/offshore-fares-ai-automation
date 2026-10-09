@@ -38,8 +38,11 @@ const PORT = Number(process.env.PORT || 3000);
 const N8N = (process.env.N8N_WEBHOOK_BASE || 'http://localhost:5678/webhook').replace(/\/$/, '');
 const N8N_BASE = N8N.replace(/\/webhook$/, '');
 const OPS_TOKEN = process.env.OPS_API_TOKEN || '';
-// PG* environment variables (incl. PGSSLMODE=require for Neon / managed Postgres) or DATABASE_URL.
-const pool = new Pool(Object.assign({ max: 5, statement_timeout: 10000 }, process.env.DATABASE_URL ? { connectionString: process.env.DATABASE_URL } : {}));
+// Node tries every resolved address (IPv6 + IPv4) with only 250 ms per attempt by default; remote databases
+// (Neon) behind a high-latency link then fail with ETIMEDOUT. Give each attempt a realistic budget.
+require('net').setDefaultAutoSelectFamilyAttemptTimeout(2500);
+// DATABASE_URL (Neon / Render) or PG* environment variables (local docker stack). SSL comes from sslmode in the URL.
+const pool = new Pool(Object.assign({ max: 5, statement_timeout: 10000, connectionTimeoutMillis: 15000 }, process.env.DATABASE_URL ? { connectionString: process.env.DATABASE_URL } : {}));
 pool.on('error', (e) => log('error', 'db_pool_error', { message: e.message }));
 const PUBLIC = path.join(__dirname, 'public');
 const DEMO_DIR = fs.existsSync(path.join(__dirname, 'demo')) ? path.join(__dirname, 'demo') : path.join(__dirname, '..', 'demo');
