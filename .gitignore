@@ -1,0 +1,10 @@
+# secrets
+.env
+*.env.local
+# dependencies / runtime
+node_modules/
+dashboard/node_modules/
+*.log
+.DS_Store
+# local test artefacts
+tests/e2e/reports/

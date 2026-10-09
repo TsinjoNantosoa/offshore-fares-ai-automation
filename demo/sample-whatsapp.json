@@ -1,0 +1,35 @@
+{
+  "multi_message": {
+    "id": "S3_MULTI_MESSAGE",
+    "scenario": "Scenario 3 – five WhatsApp messages become ONE consolidated RFQ",
+    "from": "15555550101",
+    "name": "Neha Kapoor (Apex Travel)",
+    "messages": ["Need London from Mumbai business", "3 pax", "17 Nov", "return 25th", "Qatar if possible"],
+    "expected": "One RFQ BOM → LHR, 3 adults, BUSINESS, 17 Nov → 25 Nov, Qatar Airways. Clarification is debounced (45 s) so the burst is merged before asking anything."
+  },
+  "replies": [
+    { "text": "Option 2 works. Please proceed.", "expected": "BOOKING_CONFIRMATION · OPT-002 · BOOKING_REQUESTED · Ticketing Desk" },
+    { "text": "second one", "expected": "OPT-002" },
+    { "text": "book Qatar", "expected": "option whose airline is Qatar Airways" },
+    { "text": "go ahead", "expected": "ambiguous (several options) → confirmation question" },
+    { "text": "please hold", "expected": "CLIENT_INTERESTED" },
+    { "text": "Too expensive. Anything cheaper?", "expected": "PRICE_CHECK · back to fare desk · no invented discount" },
+    { "text": "can you check Emirates?", "expected": "alternative request" },
+    { "text": "change dates to 18th", "expected": "requirements updated → requote" }
+  ],
+  "cloud_api_example_payload": {
+    "object": "whatsapp_business_account",
+    "entry": [{
+      "id": "WHATSAPP_BUSINESS_ACCOUNT_ID",
+      "changes": [{
+        "field": "messages",
+        "value": {
+          "messaging_product": "whatsapp",
+          "metadata": { "display_phone_number": "15550000000", "phone_number_id": "PHONE_NUMBER_ID" },
+          "contacts": [{ "profile": { "name": "Neha Kapoor" }, "wa_id": "15555550101" }],
+          "messages": [{ "from": "15555550101", "id": "wamid.EXAMPLE", "timestamp": "1791198000", "type": "text", "text": { "body": "3 pax" } }]
+        }
+      }]
+    }]
+  }
+}

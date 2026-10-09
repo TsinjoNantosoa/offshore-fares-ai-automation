@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Offshore Fares Ops Console</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%230b5cad' d='M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
+      <div><strong>Offshore Fares</strong><span>AI Travel Operations Orchestrator</span></div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#/dashboard" data-tab="dashboard">Dashboard</a>
+      <a href="#/queue" data-tab="queue">Live RFQ Queue</a>
+      <a href="#/alerts" data-tab="alerts">Desk Inbox <span class="pill" id="alertCount"></span></a>
+      <a href="#/outbox" data-tab="outbox">Outbox</a>
+      <a href="#/simulator" data-tab="simulator">Demo Simulator</a>
+      <a href="#/activity" data-tab="activity">Activity</a>
+    </nav>
+    <div class="mode" id="modeBadges"></div>
+  </header>
+  <main id="view" aria-live="polite"></main>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

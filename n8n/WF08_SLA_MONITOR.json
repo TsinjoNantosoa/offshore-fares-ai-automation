@@ -1,0 +1,240 @@
+{
+  "id": "ofwf080000000008",
+  "name": "WF08_SLA_MONITOR",
+  "nodes": [
+    {
+      "name": "About WF08",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## WF08 – SLA monitor\nEvery minute: time spent in the current status vs `SLA_*_MINUTES` (CRITICAL × `SLA_CRITICAL_FACTOR`).\nOne alert per RFQ per status episode (`alerts.dedupe_key`) – never repeated. `rfqs.sla_breached = true` is kept for reporting.\nManual run: `POST /webhook/ops/run-sla`.",
+        "width": 560,
+        "height": 200,
+        "color": 7
+      },
+      "id": "ofwf080000000008-001",
+      "position": [
+        0,
+        -280
+      ]
+    },
+    {
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "ofwf080000000008-002",
+      "position": [
+        0,
+        -60
+      ]
+    },
+    {
+      "name": "Run Now (ops)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "of-ops-run-sla-post",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ops/run-sla",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ofOpsTokenCred01",
+          "name": "Ops Console Token"
+        }
+      },
+      "id": "ofwf080000000008-003",
+      "position": [
+        0,
+        120
+      ]
+    },
+    {
+      "name": "Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Payload\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn [{ json: { db: {} } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf080000000008-004",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Open RFQs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_sla_candidates($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf080000000008-005",
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "name": "Evaluate SLA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Evaluate SLA\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst cfg = OF.config.getConfig($env);\r\nconst now = new Date();\r\nconst breaches = ($input.first().json.r || []).map((r) => Object.assign({ rfq_id: r.id, status: r.status }, OF.sla.evaluateSla(r, now, cfg))).filter((e) => e.breached);\r\nreturn [{ json: { evaluated: ($input.first().json.r || []).length, db: { breaches } } }];\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/sla\": function (module, exports, require) {\n/**\n * WF08 – SLA evaluation. Thresholds (minutes) per status are configurable;\n * CRITICAL requests get a tighter SLA (SLA_CRITICAL_FACTOR, default 0.5).\n * Statuses waiting on the client (NEEDS_INFORMATION, AWAITING_CLIENT) have no internal SLA.\n */\n\nfunction thresholds(cfg) {\n  return {\n    NEW: cfg.SLA_NEW_MINUTES,\n    READY_FOR_SEARCH: cfg.SLA_READY_FOR_SEARCH_MINUTES,\n    ASSIGNED: cfg.SLA_ASSIGNED_MINUTES,\n    SEARCHING: cfg.SLA_SEARCHING_MINUTES,\n    FARES_FOUND: cfg.SLA_FARES_FOUND_MINUTES,\n    PENDING_APPROVAL: cfg.SLA_PENDING_APPROVAL_MINUTES,\n    BOOKING_REQUESTED: cfg.SLA_BOOKING_REQUEST_MINUTES,\n    CHANGE_REQUESTED: cfg.SLA_CHANGE_REQUEST_MINUTES,\n    REFUND_REQUESTED: cfg.SLA_REFUND_REQUEST_MINUTES,\n  };\n}\n\n/**\n * @param {{ status, status_changed_at, priority_level }} rfq\n * @returns {{ tracked, breached, minutes_in_status, threshold_minutes, dedupe_key }}\n */\nfunction evaluateSla(rfq, now, cfg) {\n  const limits = thresholds(cfg);\n  const base = limits[rfq.status];\n  const nowMs = now ? new Date(now).getTime() : Date.now();\n  const since = new Date(rfq.status_changed_at).getTime();\n  const minutes = Math.max(0, (nowMs - since) / 60000);\n  if (base === undefined || base === null || !Number.isFinite(since)) {\n    return { tracked: false, breached: false, minutes_in_status: Math.round(minutes) };\n  }\n  const threshold = rfq.priority_level === 'CRITICAL' ? Math.max(1, Math.round(base * cfg.SLA_CRITICAL_FACTOR)) : base;\n  const breached = minutes > threshold;\n  return {\n    tracked: true,\n    breached,\n    minutes_in_status: Math.round(minutes),\n    threshold_minutes: threshold,\n    // One alert per RFQ per status episode – re-entering the status later creates a new episode.\n    dedupe_key: `SLA:${rfq.id}:${rfq.status}:${since}`,\n  };\n}\n\nmodule.exports = { evaluateSla, thresholds };\n\n  },\n  \"lib/config\": function (module, exports, require) {\n'use strict';\r\n/**\r\n * Typed runtime configuration.\r\n *\r\n * In n8n Code nodes this is called with `$env`; in tests with a plain object.\r\n * Only NON-SECRET settings are read here. Secrets (OpenAI key, WhatsApp token,\r\n * database password) live in n8n Credentials and are never visible to Code nodes.\r\n */\r\n\r\nconst DEFAULTS = {\r\n  DEMO_MODE: true,\r\n  REQUIRE_HUMAN_APPROVAL: true,\r\n  AUTO_ACKNOWLEDGE: true,\r\n  COMPANY_NAME: 'Offshore Fares',\r\n  COMPANY_SIGNATURE: 'Offshore Fares – Premium Fares Desk',\r\n  BUSINESS_TIMEZONE: 'UTC',\r\n  AI_PROVIDER: 'openai', // 'openai' | 'rules' (offline demo – deterministic fallback only)\r\n  OPENAI_MODEL: 'gpt-4.1-mini',\r\n  OPENAI_TEMPERATURE: 0,\r\n  OPENAI_FORMATTER_TEMPERATURE: 0.2,\r\n  AI_CONFIDENCE_THRESHOLD: 0.7,\r\n  CORRELATION_WINDOW_HOURS: 72,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_WHATSAPP: 45,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_EMAIL: 0,\r\n  MAX_CLARIFICATIONS: 2,\r\n  GROUP_MIN_PASSENGERS: 10,\r\n  FOLLOWUP_1_HOURS: 4,\r\n  FOLLOWUP_2_HOURS: 24,\r\n  MAX_FOLLOWUPS: 2,\r\n  SLA_NEW_MINUTES: 5,\r\n  SLA_READY_FOR_SEARCH_MINUTES: 10,\r\n  SLA_ASSIGNED_MINUTES: 15,\r\n  SLA_SEARCHING_MINUTES: 45,\r\n  SLA_FARES_FOUND_MINUTES: 10,\r\n  SLA_PENDING_APPROVAL_MINUTES: 10,\r\n  SLA_BOOKING_REQUEST_MINUTES: 5,\r\n  SLA_CHANGE_REQUEST_MINUTES: 15,\r\n  SLA_REFUND_REQUEST_MINUTES: 60,\r\n  SLA_CRITICAL_FACTOR: 0.5,\r\n  WHATSAPP_GRAPH_VERSION: 'v21.0',\r\n  WHATSAPP_PHONE_NUMBER_ID: '',\r\n  WHATSAPP_FOLLOWUP_TEMPLATE: 'quote_followup',\r\n  WHATSAPP_TEMPLATE_LANGUAGE: 'en',\r\n  WHATSAPP_SIGNATURE_REQUIRED: false,\r\n  DATE_ORDER: 'DMY',\r\n  PRIORITY_RULES_JSON: '',\r\n};\r\n\r\nconst BOOLEAN_KEYS = ['DEMO_MODE', 'REQUIRE_HUMAN_APPROVAL', 'AUTO_ACKNOWLEDGE', 'WHATSAPP_SIGNATURE_REQUIRED'];\r\n\r\nfunction readEnv(env, key) {\r\n  try {\r\n    const value = env ? env[key] : undefined;\r\n    return value === undefined || value === null || value === '' ? undefined : value;\r\n  } catch (_) {\r\n    // n8n throws when env access is blocked; fall back to defaults.\r\n    return undefined;\r\n  }\r\n}\r\n\r\nfunction toBool(value, fallback) {\r\n  if (value === undefined) return fallback;\r\n  if (typeof value === 'boolean') return value;\r\n  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());\r\n}\r\n\r\nfunction getConfig(env) {\r\n  const cfg = {};\r\n  for (const key of Object.keys(DEFAULTS)) {\r\n    const fallback = DEFAULTS[key];\r\n    const raw = readEnv(env, key);\r\n    if (BOOLEAN_KEYS.includes(key)) cfg[key] = toBool(raw, fallback);\r\n    else if (typeof fallback === 'number') {\r\n      const n = raw === undefined ? NaN : Number(raw);\r\n      cfg[key] = Number.isFinite(n) ? n : fallback;\r\n    } else cfg[key] = raw === undefined ? fallback : String(raw);\r\n  }\r\n  return cfg;\r\n}\r\n\r\n/** Reasoning-family models reject custom temperature; everything else gets a low one. */\r\nfunction supportsTemperature(model) {\r\n  return !/^(o\\d|gpt-5)/i.test(String(model || ''));\r\n}\r\n\r\nmodule.exports = { DEFAULTS, getConfig, supportsTemperature, toBool };\r\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"sla\": __req(\"lib/sla\"), \"config\": __req(\"lib/config\") };\n}\n"
+      },
+      "id": "ofwf080000000008-006",
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "name": "Record Breaches (dedup)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_record_sla_breaches($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf080000000008-007",
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Summary\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst r = $input.first().json.r;\r\nreturn [{ json: { evaluated: $('Evaluate SLA').first().json.evaluated, new_alerts: r.new_alerts } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf080000000008-008",
+      "position": [
+        1300,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every Minute": {
+      "main": [
+        [
+          {
+            "node": "Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Now (ops)": {
+      "main": [
+        [
+          {
+            "node": "Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload": {
+      "main": [
+        [
+          {
+            "node": "Open RFQs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open RFQs": {
+      "main": [
+        [
+          {
+            "node": "Evaluate SLA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate SLA": {
+      "main": [
+        [
+          {
+            "node": "Record Breaches (dedup)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Breaches (dedup)": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "ofwf990000000099"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

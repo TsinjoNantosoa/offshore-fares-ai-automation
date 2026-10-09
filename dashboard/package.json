@@ -1,0 +1,10 @@
+{
+  "name": "offshore-fares-ops-console",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ops console for the Offshore Fares AI Travel Operations Orchestrator (read-only DB access, actions via n8n webhooks)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=20" },
+  "dependencies": { "pg": "^8.13.1" }
+}

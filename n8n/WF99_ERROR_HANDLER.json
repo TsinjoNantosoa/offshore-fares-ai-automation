@@ -1,0 +1,108 @@
+{
+  "id": "ofwf990000000099",
+  "name": "WF99_ERROR_HANDLER",
+  "nodes": [
+    {
+      "name": "About WF99",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## WF99 – Error handler (error workflow of every WF)\nLogs the failure (secrets redacted) in `workflow_errors`, raises a deduplicated alert, and – if an inbound message was being processed – marks it FAILED with exponential backoff (1 / 5 / 15 min). After 3 failures it goes to the **dead letter** state (visible in the console, `RETRY_MESSAGE` action).\nNode-level: OpenAI errors fall back to rules; Postgres / Gmail / WhatsApp nodes retry before failing.",
+        "width": 640,
+        "height": 240,
+        "color": 7
+      },
+      "id": "ofwf990000000099-001",
+      "position": [
+        0,
+        -320
+      ]
+    },
+    {
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "id": "ofwf990000000099-002",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Build Error Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build Error Record\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst e = $input.first().json;\r\nconst exec = e.execution || {};\r\nconst err = exec.error || e.trigger && e.trigger.error || {};\r\nconst safe = OF.security.redactObject({ message: err.message, description: err.description, node: exec.lastNodeExecuted, mode: exec.mode });\r\nreturn [{ json: { db: {\r\n  workflow: 'WF99_ERROR_HANDLER', workflow_id: e.workflow ? e.workflow.id : null, workflow_name: e.workflow ? e.workflow.name : null,\r\n  execution_id: exec.id ? String(exec.id) : null, node: exec.lastNodeExecuted || null,\r\n  error_message: OF.security.redactSecrets(err.message || 'Unknown error'), details: safe,\r\n} } }];\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/security\": function (module, exports, require) {\n/**\n * Prompt-injection screening and secret redaction.\n *\n * Defence in depth – the real protections are architectural:\n *  - the model never receives secrets (keys live in n8n Credentials),\n *  - the model only returns schema-constrained JSON that code validates,\n *  - the model cannot trigger sends: delivery is decided by workflow logic + human approval.\n * This module adds detection (flag + audit + human review) and output scrubbing.\n */\n\nconst INJECTION_PATTERNS = [\n  { id: 'ignore_instructions', re: /\\b(ignore|disregard|forget|override)\\b[^.\\n]{0,40}\\b(instructions?|prompts?|rules?|guidelines?)\\b/i },\n  { id: 'reveal_secret', re: /\\b(show|reveal|print|give|send|tell|display|leak|share|output)\\b[^.\\n]{0,40}\\b(api[\\s_-]?keys?|secrets?|passwords?|tokens?|credentials?|system prompt|env(?:ironment)? variables?)\\b/i },\n  { id: 'role_override', re: /\\b(you are now|act as|pretend to be|from now on you|developer mode|jailbreak|DAN mode)\\b/i },\n  { id: 'system_markup', re: /(<\\/?(system|assistant|instructions?)>|\\[\\/?(INST|SYSTEM)\\]|^#{2,}\\s*(system|instruction))/im },\n  { id: 'tool_abuse', re: /\\b(execute|run)\\b[^.\\n]{0,30}\\b(command|shell|sql|code)\\b|\\bdrop\\s+table\\b/i },\n  { id: 'price_manipulation', re: /\\b(set|change|make)\\b[^.\\n]{0,30}\\b(price|fare)\\b[^.\\n]{0,20}\\b(to|=)\\s*(?:usd|\\$|eur|0)\\b/i },\n];\n\nconst SECRET_PATTERNS = [\n  /\\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\\b/g, // OpenAI-style keys\n  /\\bEAA[A-Za-z0-9]{20,}\\b/g, // Meta / WhatsApp access tokens\n  /\\bAIza[0-9A-Za-z_-]{30,}\\b/g, // Google API keys\n  /\\bya29\\.[0-9A-Za-z_-]{20,}\\b/g, // Google OAuth access tokens\n  /\\bBearer\\s+[A-Za-z0-9._-]{20,}\\b/gi,\n  /\\b(?:password|passwd|pwd|secret|api[_-]?key|token)\\s*[:=]\\s*\\S{6,}/gi,\n  /\\b(?:\\d[ -]?){13,19}\\b/g, // card-number-like digit runs\n];\n\nfunction screenInjection(text) {\n  const src = String(text || '');\n  const signals = INJECTION_PATTERNS.filter((p) => p.re.test(src)).map((p) => p.id);\n  return { suspected: signals.length > 0, signals };\n}\n\nfunction redactSecrets(value) {\n  let out = String(value === undefined || value === null ? '' : value);\n  for (const re of SECRET_PATTERNS) out = out.replace(re, '[REDACTED]');\n  return out;\n}\n\nfunction containsSecret(value) {\n  const src = String(value || '');\n  return SECRET_PATTERNS.some((re) => new RegExp(re.source, re.flags.replace('g', '')).test(src));\n}\n\n/** Deep-redact an object (used before logging errors / payloads). */\nfunction redactObject(value, depth) {\n  const d = depth || 0;\n  if (d > 6) return '[TRUNCATED]';\n  if (Array.isArray(value)) return value.slice(0, 50).map((v) => redactObject(v, d + 1));\n  if (value && typeof value === 'object') {\n    const out = {};\n    for (const [k, v] of Object.entries(value)) {\n      if (/(authorization|api[_-]?key|token|secret|password|cookie)/i.test(k)) out[k] = '[REDACTED]';\n      else out[k] = redactObject(v, d + 1);\n    }\n    return out;\n  }\n  if (typeof value === 'string') return redactSecrets(value).slice(0, 4000);\n  return value;\n}\n\n/**\n * Wrap untrusted content for the model. Closing tags inside the content are\n * neutralised so the message cannot \"escape\" its envelope.\n */\nfunction wrapUntrusted(text, tag) {\n  const name = tag || 'untrusted_message';\n  const safe = String(text || '').replace(new RegExp(`</?\\\\s*${name}\\\\s*>`, 'gi'), '[tag removed]');\n  return `<${name}>\\n${safe}\\n</${name}>`;\n}\n\nmodule.exports = { screenInjection, redactSecrets, redactObject, containsSecret, wrapUntrusted };\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"security\": __req(\"lib/security\") };\n}\n"
+      },
+      "id": "ofwf990000000099-003",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Record Error / Retry / Dead Letter",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_record_workflow_error($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf990000000099-004",
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Error Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Error Record": {
+      "main": [
+        [
+          {
+            "node": "Record Error / Retry / Dead Letter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

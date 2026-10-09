@@ -1,0 +1,71 @@
+{
+  "_note": "DEMO fare options for the BOM → LHR story (Scenario 4). Fictional values for demonstration – not real fares. The ops console pre-fills the same structure from MockFareProvider with live dates; fare_valid_until must be in the future when submitted.",
+  "rfq_number": "OFF-RFQ-2026-XXXXXX",
+  "entered_by": "Aisha Khan",
+  "options": [
+    {
+      "airline": "Qatar Airways",
+      "flight_segments": [
+        { "direction": "OUTBOUND", "flight_no": "QR 557", "from": "BOM", "to": "DOH", "depart_at": "2026-11-17T02:40", "arrive_at": "2026-11-17T04:20" },
+        { "direction": "OUTBOUND", "flight_no": "QR 3", "from": "DOH", "to": "LHR", "depart_at": "2026-11-17T07:55", "arrive_at": "2026-11-17T13:05" },
+        { "direction": "INBOUND", "flight_no": "QR 4", "from": "LHR", "to": "DOH", "depart_at": "2026-11-25T15:20", "arrive_at": "2026-11-25T19:45" },
+        { "direction": "INBOUND", "flight_no": "QR 558", "from": "DOH", "to": "BOM", "depart_at": "2026-11-26T01:30", "arrive_at": "2026-11-26T08:10" }
+      ],
+      "departure_at": "2026-11-17T02:40",
+      "return_departure_at": "2026-11-25T15:20",
+      "total_duration_minutes": 690,
+      "stops": 1,
+      "cabin": "BUSINESS",
+      "fare": { "amount": 2450, "currency": "USD" },
+      "fare_basis": "PER_PASSENGER",
+      "baggage": "40 kg",
+      "change_penalty": "USD 150",
+      "refund_penalty": "USD 250",
+      "fare_valid_until": "2026-10-05T16:00:00Z",
+      "source": "MANUAL",
+      "verified": true
+    },
+    {
+      "airline": "Emirates",
+      "flight_segments": [
+        { "direction": "OUTBOUND", "flight_no": "EK 501", "from": "BOM", "to": "DXB", "depart_at": "2026-11-17T04:05", "arrive_at": "2026-11-17T05:55" },
+        { "direction": "OUTBOUND", "flight_no": "EK 1", "from": "DXB", "to": "LHR", "depart_at": "2026-11-17T08:30", "arrive_at": "2026-11-17T13:15" },
+        { "direction": "INBOUND", "flight_no": "EK 2", "from": "LHR", "to": "DXB", "depart_at": "2026-11-25T14:30", "arrive_at": "2026-11-25T18:55" },
+        { "direction": "INBOUND", "flight_no": "EK 502", "from": "DXB", "to": "BOM", "depart_at": "2026-11-26T21:45", "arrive_at": "2026-11-27T07:35" }
+      ],
+      "departure_at": "2026-11-17T04:05",
+      "return_departure_at": "2026-11-25T14:30",
+      "total_duration_minutes": 725,
+      "stops": 1,
+      "cabin": "BUSINESS",
+      "fare": { "amount": 2610, "currency": "USD" },
+      "fare_basis": "PER_PASSENGER",
+      "baggage": "40 kg",
+      "change_penalty": "USD 200",
+      "refund_penalty": "USD 300",
+      "fare_valid_until": "2026-10-05T16:00:00Z",
+      "source": "MANUAL",
+      "verified": true
+    },
+    {
+      "airline": "British Airways",
+      "flight_segments": [
+        { "direction": "OUTBOUND", "flight_no": "BA 138", "from": "BOM", "to": "LHR", "depart_at": "2026-11-17T02:15", "arrive_at": "2026-11-17T07:25" },
+        { "direction": "INBOUND", "flight_no": "BA 139", "from": "LHR", "to": "BOM", "depart_at": "2026-11-25T20:50", "arrive_at": "2026-11-26T10:35" }
+      ],
+      "departure_at": "2026-11-17T02:15",
+      "return_departure_at": "2026-11-25T20:50",
+      "total_duration_minutes": 590,
+      "stops": 0,
+      "cabin": "BUSINESS",
+      "fare": { "amount": 2890, "currency": "USD" },
+      "fare_basis": "PER_PASSENGER",
+      "baggage": "2 x 32 kg",
+      "change_penalty": "USD 0 (fare difference applies)",
+      "refund_penalty": "USD 400",
+      "fare_valid_until": "2026-10-05T16:00:00Z",
+      "source": "MANUAL",
+      "verified": true
+    }
+  ]
+}

@@ -1,0 +1,367 @@
+{
+  "id": "ofwf050000000005",
+  "name": "WF05_MISSING_INFORMATION_HANDLER",
+  "nodes": [
+    {
+      "name": "About WF05",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## WF05 – Missing information handler\nAsks ONLY for the missing mandatory fields, in one short message (deterministic template).\n\n* Debounced: WhatsApp bursts (\"3 pax\", \"17 Nov\"...) are merged before asking (`CLARIFICATION_DEBOUNCE_SECONDS_*`).\n* Never asks the same question twice; escalates to a human after `MAX_CLARIFICATIONS`.\n* Triggered by WF06 (immediate check) and every minute.",
+        "width": 560,
+        "height": 240,
+        "color": 7
+      },
+      "id": "ofwf050000000005-001",
+      "position": [
+        0,
+        -340
+      ]
+    },
+    {
+      "name": "When Called By Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "ofwf050000000005-002",
+      "position": [
+        0,
+        -40
+      ]
+    },
+    {
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "ofwf050000000005-003",
+      "position": [
+        0,
+        140
+      ]
+    },
+    {
+      "name": "Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Prepare\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst cfg = OF.config.getConfig($env);\r\nconst first = $input.first().json || {};\r\nreturn [{ json: { db: { rfq_id: first.rfq_id || null, limit: 20, max_clarifications: cfg.MAX_CLARIFICATIONS } } }];\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/config\": function (module, exports, require) {\n'use strict';\r\n/**\r\n * Typed runtime configuration.\r\n *\r\n * In n8n Code nodes this is called with `$env`; in tests with a plain object.\r\n * Only NON-SECRET settings are read here. Secrets (OpenAI key, WhatsApp token,\r\n * database password) live in n8n Credentials and are never visible to Code nodes.\r\n */\r\n\r\nconst DEFAULTS = {\r\n  DEMO_MODE: true,\r\n  REQUIRE_HUMAN_APPROVAL: true,\r\n  AUTO_ACKNOWLEDGE: true,\r\n  COMPANY_NAME: 'Offshore Fares',\r\n  COMPANY_SIGNATURE: 'Offshore Fares – Premium Fares Desk',\r\n  BUSINESS_TIMEZONE: 'UTC',\r\n  AI_PROVIDER: 'openai', // 'openai' | 'rules' (offline demo – deterministic fallback only)\r\n  OPENAI_MODEL: 'gpt-4.1-mini',\r\n  OPENAI_TEMPERATURE: 0,\r\n  OPENAI_FORMATTER_TEMPERATURE: 0.2,\r\n  AI_CONFIDENCE_THRESHOLD: 0.7,\r\n  CORRELATION_WINDOW_HOURS: 72,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_WHATSAPP: 45,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_EMAIL: 0,\r\n  MAX_CLARIFICATIONS: 2,\r\n  GROUP_MIN_PASSENGERS: 10,\r\n  FOLLOWUP_1_HOURS: 4,\r\n  FOLLOWUP_2_HOURS: 24,\r\n  MAX_FOLLOWUPS: 2,\r\n  SLA_NEW_MINUTES: 5,\r\n  SLA_READY_FOR_SEARCH_MINUTES: 10,\r\n  SLA_ASSIGNED_MINUTES: 15,\r\n  SLA_SEARCHING_MINUTES: 45,\r\n  SLA_FARES_FOUND_MINUTES: 10,\r\n  SLA_PENDING_APPROVAL_MINUTES: 10,\r\n  SLA_BOOKING_REQUEST_MINUTES: 5,\r\n  SLA_CHANGE_REQUEST_MINUTES: 15,\r\n  SLA_REFUND_REQUEST_MINUTES: 60,\r\n  SLA_CRITICAL_FACTOR: 0.5,\r\n  WHATSAPP_GRAPH_VERSION: 'v21.0',\r\n  WHATSAPP_PHONE_NUMBER_ID: '',\r\n  WHATSAPP_FOLLOWUP_TEMPLATE: 'quote_followup',\r\n  WHATSAPP_TEMPLATE_LANGUAGE: 'en',\r\n  WHATSAPP_SIGNATURE_REQUIRED: false,\r\n  DATE_ORDER: 'DMY',\r\n  PRIORITY_RULES_JSON: '',\r\n};\r\n\r\nconst BOOLEAN_KEYS = ['DEMO_MODE', 'REQUIRE_HUMAN_APPROVAL', 'AUTO_ACKNOWLEDGE', 'WHATSAPP_SIGNATURE_REQUIRED'];\r\n\r\nfunction readEnv(env, key) {\r\n  try {\r\n    const value = env ? env[key] : undefined;\r\n    return value === undefined || value === null || value === '' ? undefined : value;\r\n  } catch (_) {\r\n    // n8n throws when env access is blocked; fall back to defaults.\r\n    return undefined;\r\n  }\r\n}\r\n\r\nfunction toBool(value, fallback) {\r\n  if (value === undefined) return fallback;\r\n  if (typeof value === 'boolean') return value;\r\n  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());\r\n}\r\n\r\nfunction getConfig(env) {\r\n  const cfg = {};\r\n  for (const key of Object.keys(DEFAULTS)) {\r\n    const fallback = DEFAULTS[key];\r\n    const raw = readEnv(env, key);\r\n    if (BOOLEAN_KEYS.includes(key)) cfg[key] = toBool(raw, fallback);\r\n    else if (typeof fallback === 'number') {\r\n      const n = raw === undefined ? NaN : Number(raw);\r\n      cfg[key] = Number.isFinite(n) ? n : fallback;\r\n    } else cfg[key] = raw === undefined ? fallback : String(raw);\r\n  }\r\n  return cfg;\r\n}\r\n\r\n/** Reasoning-family models reject custom temperature; everything else gets a low one. */\r\nfunction supportsTemperature(model) {\r\n  return !/^(o\\d|gpt-5)/i.test(String(model || ''));\r\n}\r\n\r\nmodule.exports = { DEFAULTS, getConfig, supportsTemperature, toBool };\r\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"config\": __req(\"lib/config\") };\n}\n"
+      },
+      "id": "ofwf050000000005-004",
+      "position": [
+        260,
+        50
+      ]
+    },
+    {
+      "name": "Claim Due Clarifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_due_clarifications($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf050000000005-005",
+      "position": [
+        520,
+        50
+      ]
+    },
+    {
+      "name": "Build Clarifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build Clarifications\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst cfg = OF.config.getConfig($env);\r\nconst items = ($input.first().json.r.items || []).filter((i) => i.action !== 'SKIP_ALREADY_ASKED');\r\nreturn items.map((i) => {\r\n  const c = OF.clarification.buildClarification({\r\n    missing: i.missing_fields, requirements: i.requirements, contactName: i.contact_first_name, rfqNumber: i.rfq_number,\r\n    companySignature: cfg.COMPANY_SIGNATURE, originalSubject: i.conversation_subject,\r\n  });\r\n  return { json: {\r\n    action: i.action, rfq_id: i.rfq_id, rfq_number: i.rfq_number, clarification_key: i.clarification_key, question: c.question,\r\n    kind: 'CLARIFICATION', email: { subject: c.subject, body: c.email_body }, whatsapp: { body: c.whatsapp_body },\r\n  } };\r\n});\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/clarification\": function (module, exports, require) {\n/**\n * WF05 – Clarification questions. Deterministic templates (no AI needed):\n * only the genuinely missing fields are asked, in one short message.\n */\nconst { listJoin } = require('./text');\nconst { formatShort } = require('./dates');\n\nfunction questionParts(missing, req) {\n  const set = new Set(missing || []);\n  const parts = [];\n  if (set.has('origin') && set.has('destination')) parts.push('the departure and destination cities');\n  else if (set.has('origin')) parts.push('the departure city');\n  else if (set.has('destination')) parts.push('the destination city');\n  if (set.has('segments')) parts.push('each flight segment (from, to and date)');\n  if (set.has('departure_date')) {\n    const amb = (req && req.ambiguities ? req.ambiguities : []).find((a) => /^\"/.test(a));\n    parts.push(amb ? `the exact departure date (${amb.replace(/^\"([^\"]+)\".*$/, 'you mentioned \"$1\"')})` : 'the exact departure date');\n  }\n  if (set.has('trip_type')) parts.push('whether this is one-way or return travel');\n  if (set.has('return_date')) parts.push('the preferred return date');\n  if (set.has('passengers.adults')) parts.push('the number of passengers');\n  if (set.has('cabin')) parts.push('the preferred cabin (Economy, Premium Economy, Business or First)');\n  return parts;\n}\n\n/**\n * Build a clarification for the given channel.\n * Returns { subject, email_body, whatsapp_body, question }.\n */\nfunction buildClarification({ missing, requirements, contactName, rfqNumber, companySignature, originalSubject }) {\n  const parts = questionParts(missing, requirements);\n  const set = new Set(missing || []);\n  let question = parts.length ? `Could you please confirm ${listJoin(parts)}?` : 'Could you please confirm the travel details?';\n  if (set.has('trip_type') && !set.has('return_date')) question += ' If return, please also share the preferred return date.';\n  const name = contactName ? ` ${contactName}` : '';\n  const known = [];\n  const r = requirements || {};\n  if (r.origin && r.origin.iata && r.destination && r.destination.iata) known.push(`${r.origin.iata} → ${r.destination.iata}`);\n  if (r.departure_date) known.push(formatShort(r.departure_date));\n  if (r.passengers && r.passengers.adults) known.push(`${r.passengers.adults} pax`);\n  if (r.cabin && r.cabin !== 'UNKNOWN') known.push(r.cabin.replace('_', ' ').toLowerCase());\n  const noted = known.length ? ` We have noted: ${known.join(', ')}.` : '';\n  const whatsapp = `Thanks${name}.${noted} ${question}`.replace(/\\s+/g, ' ').trim();\n  const email = [\n    `Hello${name},`,\n    '',\n    `Thank you for your request (ref. ${rfqNumber}).${noted}`,\n    '',\n    `To search the best available fares, ${question.charAt(0).toLowerCase()}${question.slice(1)}`,\n    '',\n    'Kind regards,',\n    companySignature || 'Offshore Fares',\n  ].join('\\n');\n  const subject = originalSubject ? (/^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject}`) : `${rfqNumber} – a few details needed`;\n  return { subject, email_body: email, whatsapp_body: whatsapp, question };\n}\n\n/** Stable fingerprint of what was asked, so the same question is not sent twice. */\nfunction clarificationKey(missing) {\n  return (missing || []).slice().sort().join('|');\n}\n\nmodule.exports = { buildClarification, clarificationKey, questionParts };\n\n  },\n  \"lib/text\": function (module, exports, require) {\n/** Text helpers: email clean-up, reference detection, small formatting utilities. */\n\nconst RFQ_RE = /\\bOFF-RFQ-(\\d{4})-(\\d{6})\\b/gi;\n\nfunction normalizeWhitespace(text) {\n  return String(text || '')\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/ /g, ' ')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\n/** Very small HTML -> text conversion for emails that only have an HTML part. */\nfunction htmlToText(html) {\n  return normalizeWhitespace(String(html || '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/(p|div|tr|li|h\\d)>/gi, '\\n')\n    .replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\"));\n}\n\nconst REPLY_MARKERS = [\n  /^On .{3,200}wrote:\\s*$/m,\n  /^-{2,}\\s*Original Message\\s*-{2,}/im,\n  /^-{2,}\\s*Forwarded message\\s*-{2,}/im,\n  /^From:\\s.+\\n(?:Sent|Date):\\s/m,\n  /^_{10,}\\s*$/m,\n];\nconst SIGNATURE_MARKERS = [/^--\\s*$/m, /^Sent from my (?:iPhone|iPad|Android|mobile|Galaxy).*$/im, /^Get Outlook for .*$/im];\nconst DISCLAIMER = /^(?:DISCLAIMER|CONFIDENTIALITY NOTICE|This (?:e-?mail|message) and any attachments? (?:is|are) confidential).*$/im;\nconst SIGN_OFF = /^(?:best regards|kind regards|warm regards|regards|best|thanks(?: (?:&|and) regards)?|thank you|cheers|sincerely|rgds|br)[,.!]?\\s*$/im;\n\n/**\n * Remove quoted replies, signatures and legal footers so only the new content is analysed.\n * Conservative: a sign-off is only cut when it sits in the last part of the message.\n */\nfunction stripEmailNoise(body) {\n  let text = normalizeWhitespace(body);\n  const cut = (re) => {\n    const m = re.exec(text);\n    if (m && m.index > 0) text = text.slice(0, m.index);\n  };\n  REPLY_MARKERS.forEach(cut);\n  text = text.split('\\n').filter((line) => !/^\\s*>/.test(line)).join('\\n');\n  SIGNATURE_MARKERS.forEach(cut);\n  cut(DISCLAIMER);\n  // Sign-off (\"Best regards,\") followed only by a few short lines (name, agency, phone) = signature block.\n  const signOff = SIGN_OFF.exec(text);\n  if (signOff && signOff.index > 0) {\n    const tail = text.slice(signOff.index).split('\\n');\n    if (tail.length <= 8 && tail.every((line) => line.length <= 80)) text = text.slice(0, signOff.index);\n  }\n  return normalizeWhitespace(text);\n}\n\nfunction findRfqNumbers(text) {\n  const out = new Set();\n  let m;\n  const re = new RegExp(RFQ_RE.source, 'gi');\n  while ((m = re.exec(String(text || ''))) !== null) out.add(`OFF-RFQ-${m[1]}-${m[2]}`);\n  return Array.from(out);\n}\n\n/** Booking reference / PNR (6 alphanumerics with at least one letter) introduced by a keyword. */\nfunction findBookingReference(text) {\n  const src = String(text || '');\n  const keyword = /\\b(?:PNR|booking(?:\\s+(?:ref(?:erence)?|no\\.?|number|code))?|ref(?:erence)?|record locator|locator)\\s*[:#-]?\\s*([A-Z0-9]{6})\\b/i.exec(src);\n  if (keyword && /[A-Z]/i.test(keyword[1]) && /^[A-Z0-9]+$/.test(keyword[1])) return keyword[1].toUpperCase();\n  return null;\n}\n\n/** \"John Carter <john@apextravel.example>\" -> { name, email } */\nfunction parseAddress(value) {\n  const src = String(value || '').trim();\n  const angle = /^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>\\s*$/.exec(src);\n  if (angle) return { name: angle[1].trim() || null, email: angle[2].trim().toLowerCase() };\n  const email = /[^\\s<>\"]+@[^\\s<>\"]+/.exec(src);\n  return { name: null, email: email ? email[0].toLowerCase() : null };\n}\n\nfunction emailDomain(email) {\n  const m = /@([^@\\s>]+)$/.exec(String(email || '').toLowerCase());\n  return m ? m[1] : null;\n}\n\n/** Digits-only E.164 representation (\"+44 7700-900123\" -> \"447700900123\"). */\nfunction normalizePhone(value) {\n  const digits = String(value || '').replace(/\\D/g, '');\n  return digits.length >= 7 ? digits : null;\n}\n\nfunction truncate(text, max) {\n  const s = String(text || '');\n  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;\n}\n\nfunction formatMoney(amount, currency) {\n  const n = Number(amount);\n  const hasCents = Math.round(n * 100) % 100 !== 0;\n  const formatted = n.toLocaleString('en-US', { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });\n  return `${String(currency || '').toUpperCase()} ${formatted}`.trim();\n}\n\nfunction listJoin(items) {\n  const list = items.filter(Boolean);\n  if (list.length <= 1) return list.join('');\n  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;\n}\n\nmodule.exports = {\n  normalizeWhitespace,\n  htmlToText,\n  stripEmailNoise,\n  findRfqNumbers,\n  findBookingReference,\n  parseAddress,\n  emailDomain,\n  normalizePhone,\n  truncate,\n  formatMoney,\n  listJoin,\n};\n\n  },\n  \"lib/dates\": function (module, exports, require) {\n/**\n * Deterministic date handling.\n *\n * Used for two things:\n *  1. Verifying dates proposed by the AI against the exact text span it cites\n *     (an AI date is only accepted if the span really expresses that date).\n *  2. The rules-based fallback extractor (OpenAI unavailable / not configured).\n *\n * Policy: ambiguous expressions (\"next week\", \"mid November\", \"next Friday\")\n * are never turned into a date – they produce a clarification question.\n * Numeric dates are read day-first (DMY), the convention of the agencies served.\n */\n\nconst MONTHS = {\n  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5,\n  jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9,\n  oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,\n};\nconst MONTH_RE = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';\nconst WEEKDAYS = {\n  sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2, wednesday: 3, wed: 3,\n  thursday: 4, thu: 4, thur: 4, thurs: 4, friday: 5, fri: 5, saturday: 6, sat: 6,\n};\nconst WEEKDAY_RE = '(sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tues?|wed|thur?s?|fri|sat)';\nconst MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];\nconst RETURN_HINT = /(return(?:ing)?|back|ret\\.?|inbound|coming back|till|until|to)\\s*(?:on\\s+)?(?:the\\s+)?$/i;\n\nconst pad = (n) => String(n).padStart(2, '0');\nconst toIso = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;\n\nfunction isValidYmd(y, m, d) {\n  if (!(m >= 1 && m <= 12 && d >= 1 && d <= 31)) return false;\n  const dt = new Date(Date.UTC(y, m - 1, d));\n  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;\n}\n\nfunction parseIso(iso) {\n  const m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(String(iso || ''));\n  if (!m) return null;\n  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];\n  return isValidYmd(y, mo, d) ? { y, m: mo, d } : null;\n}\n\nfunction isIsoDate(iso) {\n  return parseIso(iso) !== null;\n}\n\nfunction addDays(iso, days) {\n  const p = parseIso(iso);\n  const dt = new Date(Date.UTC(p.y, p.m - 1, p.d + days));\n  return toIso(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());\n}\n\nfunction diffDays(a, b) {\n  const pa = parseIso(a);\n  const pb = parseIso(b);\n  return Math.round((Date.UTC(pb.y, pb.m - 1, pb.d) - Date.UTC(pa.y, pa.m - 1, pa.d)) / 86400000);\n}\n\nfunction weekday(iso) {\n  const p = parseIso(iso);\n  return new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay();\n}\n\n/** Current calendar date in the business timezone. */\nfunction todayIn(timeZone, now) {\n  const date = now ? new Date(now) : new Date();\n  try {\n    return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);\n  } catch (_) {\n    return date.toISOString().slice(0, 10);\n  }\n}\n\n/** Offset (minutes) of a timezone at a given instant. */\nfunction tzOffsetMinutes(timeZone, now) {\n  const date = now ? new Date(now) : new Date();\n  try {\n    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {\n      timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',\n    }).formatToParts(date).map((p) => [p.type, p.value]));\n    const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);\n    return Math.round((asUtc - date.getTime()) / 60000);\n  } catch (_) {\n    return 0;\n  }\n}\n\n/** Hours from `now` until the start (00:00 business time) of an ISO date. */\nfunction hoursUntil(iso, now, timeZone) {\n  const p = parseIso(iso);\n  if (!p) return null;\n  const nowMs = now ? new Date(now).getTime() : Date.now();\n  const startUtc = Date.UTC(p.y, p.m - 1, p.d) - tzOffsetMinutes(timeZone || 'UTC', nowMs) * 60000;\n  return (startUtc - nowMs) / 3600000;\n}\n\nfunction resolveDayMonth(day, month, year, today) {\n  if (year) {\n    const y = year < 100 ? 2000 + year : year;\n    return isValidYmd(y, month, day) ? toIso(y, month, day) : null;\n  }\n  const t = parseIso(today);\n  for (const y of [t.y, t.y + 1]) {\n    if (!isValidYmd(y, month, day)) continue;\n    const iso = toIso(y, month, day);\n    if (iso >= today) return iso;\n  }\n  return null;\n}\n\n/** \"the 25th\": same month as the anchor (or today) if not earlier, otherwise next month. */\nfunction resolveDayOnly(day, anchor, today) {\n  const base = parseIso(anchor || today);\n  if (!base) return null;\n  for (let i = 0; i < 3; i += 1) {\n    const monthIndex = base.m - 1 + i;\n    const y = base.y + Math.floor(monthIndex / 12);\n    const m = (monthIndex % 12) + 1;\n    if (!isValidYmd(y, m, day)) continue;\n    const iso = toIso(y, m, day);\n    if (iso >= (anchor || today)) return iso;\n  }\n  return null;\n}\n\nfunction upcomingWeekday(target, today) {\n  const delta = (target - weekday(today) + 7) % 7 || 7;\n  return addDays(today, delta);\n}\n\n/**\n * Find date expressions in text.\n * Returns [{ text, start, end, iso, ambiguous, kind, role, candidates }]\n * role is 'return' when the expression is introduced by a return keyword.\n */\nfunction findDates(text, opts) {\n  const options = opts || {};\n  const today = options.today;\n  const src = String(text || '');\n  const out = [];\n  const taken = [];\n  const free = (s, e) => !taken.some(([a, b]) => s < b && e > a);\n  const push = (match, item) => {\n    const start = match.index;\n    const end = start + match[0].length;\n    if (!free(start, end)) return false;\n    taken.push([start, end]);\n    const before = src.slice(Math.max(0, start - 18), start);\n    out.push(Object.assign({ text: match[0].trim(), start, end, role: RETURN_HINT.test(before) ? 'return' : null }, item));\n    return true;\n  };\n  const scan = (re, fn) => {\n    const r = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);\n    let m;\n    while ((m = r.exec(src)) !== null) fn(m);\n  };\n\n  // Ranges: \"17-25 Nov\", \"17 to 25 November 2026\"\n  scan(new RegExp(`\\\\b(\\\\d{1,2})(?:st|nd|rd|th)?\\\\s*(?:-|–|to|till|until)\\\\s*(\\\\d{1,2})(?:st|nd|rd|th)?\\\\s+${MONTH_RE}\\\\.?(?:,?\\\\s*(\\\\d{4}))?\\\\b`, 'i'), (m) => {\n    const month = MONTHS[m[3].toLowerCase()];\n    const year = m[4] ? Number(m[4]) : null;\n    const dep = resolveDayMonth(Number(m[1]), month, year, today);\n    const ret = dep ? resolveDayOnly(Number(m[2]), dep, today) : null;\n    if (push(m, { iso: dep, ambiguous: !dep, kind: 'range_start', range_end: ret })) {\n      out.push({ text: m[0].trim(), start: m.index, end: m.index + m[0].length, iso: ret, ambiguous: !ret, kind: 'range_end', role: 'return' });\n    }\n  });\n  // ISO 2026-11-17\n  scan(/\\b(20\\d{2})-(\\d{1,2})-(\\d{1,2})\\b/, (m) => {\n    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];\n    push(m, { iso: isValidYmd(y, mo, d) ? toIso(y, mo, d) : null, ambiguous: !isValidYmd(y, mo, d), kind: 'explicit' });\n  });\n  // Day-first numeric: 17/11, 17/11/2026, 17.11.26, 17-11-2026 (dash needs a year)\n  scan(/\\b(\\d{1,2})([/.])(\\d{1,2})(?:\\2(\\d{2,4}))?\\b|\\b(\\d{1,2})-(\\d{1,2})-(\\d{2,4})\\b/, (m) => {\n    const d = Number(m[1] || m[5]);\n    const mo = Number(m[3] || m[6]);\n    const yRaw = m[4] || m[7];\n    const y = yRaw ? Number(yRaw) : null;\n    const iso = isValidYmd(y ? (y < 100 ? 2000 + y : y) : 2000, mo, d) ? resolveDayMonth(d, mo, y, today) : null;\n    push(m, { iso, ambiguous: !iso, kind: 'explicit' });\n  });\n  // 17 Nov, 17th November 2026, 17Nov\n  scan(new RegExp(`\\\\b(\\\\d{1,2})(?:st|nd|rd|th)?\\\\s*(?:of\\\\s+)?${MONTH_RE}\\\\.?(?:,?\\\\s*(\\\\d{4}))?\\\\b`, 'i'), (m) => {\n    const iso = resolveDayMonth(Number(m[1]), MONTHS[m[2].toLowerCase()], m[3] ? Number(m[3]) : null, today);\n    push(m, { iso, ambiguous: !iso, kind: 'explicit' });\n  });\n  // Nov 17, November 17th, 2026\n  scan(new RegExp(`\\\\b${MONTH_RE}\\\\.?\\\\s+(\\\\d{1,2})(?:st|nd|rd|th)?(?:,?\\\\s*(\\\\d{4}))?\\\\b`, 'i'), (m) => {\n    const iso = resolveDayMonth(Number(m[2]), MONTHS[m[1].toLowerCase()], m[3] ? Number(m[3]) : null, today);\n    push(m, { iso, ambiguous: !iso, kind: 'explicit' });\n  });\n  // Ambiguous periods – never resolved to a date.\n  scan(new RegExp(`\\\\b(?:next|this|coming|following)\\\\s+(?:week|weekend|month|fortnight)\\\\b|\\\\b(?:early|mid|late|end of|beginning of|start of)[\\\\s-]+(?:${MONTH_RE}|next month|the month|this month)\\\\b|\\\\bweekend\\\\b|\\\\bsometime\\\\b|\\\\bsoon\\\\b`, 'i'), (m) => {\n    push(m, { iso: null, ambiguous: true, kind: 'ambiguous_period' });\n  });\n  // Relative days\n  scan(/\\bday after tomorrow\\b/i, (m) => push(m, { iso: addDays(today, 2), ambiguous: false, kind: 'relative' }));\n  scan(/\\b(?:tomorrow|tmrw|tmr)(?:'s)?\\b/i, (m) => push(m, { iso: addDays(today, 1), ambiguous: false, kind: 'relative' }));\n  scan(/\\b(?:today|tonight)(?:'s)?\\b/i, (m) => push(m, { iso: today, ambiguous: false, kind: 'relative' }));\n  scan(/\\bin\\s+(\\d{1,2})\\s+days?\\b/i, (m) => push(m, { iso: addDays(today, Number(m[1])), ambiguous: false, kind: 'relative' }));\n  // \"next Friday\" is ambiguous (this coming Friday or the one after?) -> clarify with both candidates.\n  scan(new RegExp(`\\\\bnext\\\\s+${WEEKDAY_RE}\\\\b`, 'i'), (m) => {\n    const first = upcomingWeekday(WEEKDAYS[m[1].toLowerCase()], today);\n    push(m, { iso: null, ambiguous: true, kind: 'ambiguous_weekday', candidates: [first, addDays(first, 7)] });\n  });\n  scan(new RegExp(`\\\\b(?:this|on|coming)\\\\s+${WEEKDAY_RE}\\\\b`, 'i'), (m) => {\n    push(m, { iso: upcomingWeekday(WEEKDAYS[m[1].toLowerCase()], today), ambiguous: false, kind: 'relative' });\n  });\n  // Day only with ordinal: \"the 25th\", \"return 25th\"\n  scan(/\\b(?:on\\s+)?(?:the\\s+)?(\\d{1,2})(?:st|nd|rd|th)\\b/i, (m) => {\n    push(m, { iso: null, ambiguous: false, kind: 'day_only', day: Number(m[1]) });\n  });\n  // \"return 25\" without ordinal (only right after a return keyword)\n  scan(/\\b(?:return(?:ing)?|back|ret)\\s+(?:on\\s+)?(?:the\\s+)?(\\d{1,2})\\b(?!\\s*(?:pax|passengers?|adults?|kg|kgs|days?|%|seats?|people|persons|hrs?|hours?|mins?))/i, (m) => {\n    const sub = /(\\d{1,2})\\s*$/.exec(m[0]);\n    const index = m.index + m[0].length - sub[0].length;\n    const fake = Object.assign([sub[0]], { index });\n    if (push(fake, { iso: null, ambiguous: false, kind: 'day_only', day: Number(sub[1]) })) out[out.length - 1].role = 'return';\n  });\n  // Month only (\"in November\") – ambiguous. \"may\" is excluded (modal verb).\n  scan(/\\b(jan(?:uary)?|feb(?:ruary)?|march|apr(?:il)?|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b/i, (m) => {\n    push(m, { iso: null, ambiguous: true, kind: 'month_only' });\n  });\n\n  out.sort((a, b) => a.start - b.start);\n  // Resolve day-only mentions against the previous explicit date (anchor) or the provided anchor.\n  let anchor = options.anchor || null;\n  for (const item of out) {\n    if (item.kind === 'day_only') {\n      item.iso = resolveDayOnly(item.day, item.role === 'return' ? anchor : anchor || null, today);\n      item.ambiguous = !item.iso;\n    }\n    if (item.iso && item.kind !== 'range_end') anchor = item.iso;\n  }\n  return out;\n}\n\n/**\n * Check a date proposed by the AI against the text span it quotes as evidence.\n * Returns { ok, iso, reason }.\n */\nfunction verifyDateEvidence(aiIso, evidence, sourceText, opts) {\n  const options = opts || {};\n  if (!aiIso) return { ok: false, iso: null, reason: 'no_date' };\n  if (!isIsoDate(aiIso)) return { ok: false, iso: null, reason: 'invalid_format' };\n  if (!evidence || !String(sourceText || '').toLowerCase().includes(String(evidence).toLowerCase().trim())) {\n    return { ok: false, iso: null, reason: 'evidence_not_in_message' };\n  }\n  const mentions = findDates(evidence, options);\n  if (mentions.some((m) => m.ambiguous)) return { ok: false, iso: null, reason: 'ambiguous_expression' };\n  const resolved = mentions.filter((m) => m.iso).map((m) => m.iso);\n  if (resolved.length) {\n    if (resolved.includes(aiIso)) return { ok: true, iso: aiIso, reason: 'verified' };\n    if (resolved.length === 1) return { ok: true, iso: resolved[0], reason: 'corrected_by_rules' };\n    return { ok: false, iso: null, reason: 'evidence_mismatch' };\n  }\n  // A format we do not parse: accept only if the span contains digits or a relative-day keyword.\n  if (/\\d/.test(evidence)) return { ok: true, iso: aiIso, reason: 'unparsed_but_numeric' };\n  return { ok: false, iso: null, reason: 'unverifiable' };\n}\n\nfunction formatLong(iso) {\n  const p = parseIso(iso);\n  return p ? `${p.d} ${MONTH_NAMES[p.m - 1]} ${p.y}` : '';\n}\n\nfunction formatShort(iso) {\n  const p = parseIso(iso);\n  return p ? `${p.d} ${MONTH_NAMES[p.m - 1].slice(0, 3)} ${p.y}` : '';\n}\n\nfunction formatDayMonth(iso) {\n  const p = parseIso(iso);\n  return p ? `${p.d} ${MONTH_NAMES[p.m - 1].slice(0, 3)}` : '';\n}\n\n/** \"2026-11-17T04:15\" -> \"17 Nov 2026, 04:15\" */\nfunction formatDateTime(value) {\n  if (!value) return '';\n  const m = /^(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}):(\\d{2})/.exec(String(value));\n  if (!m) return formatShort(String(value).slice(0, 10));\n  return `${formatShort(m[1])}, ${m[2]}:${m[3]}`;\n}\n\nmodule.exports = {\n  MONTH_NAMES,\n  isIsoDate,\n  parseIso,\n  addDays,\n  diffDays,\n  weekday,\n  todayIn,\n  tzOffsetMinutes,\n  hoursUntil,\n  findDates,\n  verifyDateEvidence,\n  formatLong,\n  formatShort,\n  formatDayMonth,\n  formatDateTime,\n};\n\n  },\n  \"lib/config\": function (module, exports, require) {\n'use strict';\r\n/**\r\n * Typed runtime configuration.\r\n *\r\n * In n8n Code nodes this is called with `$env`; in tests with a plain object.\r\n * Only NON-SECRET settings are read here. Secrets (OpenAI key, WhatsApp token,\r\n * database password) live in n8n Credentials and are never visible to Code nodes.\r\n */\r\n\r\nconst DEFAULTS = {\r\n  DEMO_MODE: true,\r\n  REQUIRE_HUMAN_APPROVAL: true,\r\n  AUTO_ACKNOWLEDGE: true,\r\n  COMPANY_NAME: 'Offshore Fares',\r\n  COMPANY_SIGNATURE: 'Offshore Fares – Premium Fares Desk',\r\n  BUSINESS_TIMEZONE: 'UTC',\r\n  AI_PROVIDER: 'openai', // 'openai' | 'rules' (offline demo – deterministic fallback only)\r\n  OPENAI_MODEL: 'gpt-4.1-mini',\r\n  OPENAI_TEMPERATURE: 0,\r\n  OPENAI_FORMATTER_TEMPERATURE: 0.2,\r\n  AI_CONFIDENCE_THRESHOLD: 0.7,\r\n  CORRELATION_WINDOW_HOURS: 72,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_WHATSAPP: 45,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_EMAIL: 0,\r\n  MAX_CLARIFICATIONS: 2,\r\n  GROUP_MIN_PASSENGERS: 10,\r\n  FOLLOWUP_1_HOURS: 4,\r\n  FOLLOWUP_2_HOURS: 24,\r\n  MAX_FOLLOWUPS: 2,\r\n  SLA_NEW_MINUTES: 5,\r\n  SLA_READY_FOR_SEARCH_MINUTES: 10,\r\n  SLA_ASSIGNED_MINUTES: 15,\r\n  SLA_SEARCHING_MINUTES: 45,\r\n  SLA_FARES_FOUND_MINUTES: 10,\r\n  SLA_PENDING_APPROVAL_MINUTES: 10,\r\n  SLA_BOOKING_REQUEST_MINUTES: 5,\r\n  SLA_CHANGE_REQUEST_MINUTES: 15,\r\n  SLA_REFUND_REQUEST_MINUTES: 60,\r\n  SLA_CRITICAL_FACTOR: 0.5,\r\n  WHATSAPP_GRAPH_VERSION: 'v21.0',\r\n  WHATSAPP_PHONE_NUMBER_ID: '',\r\n  WHATSAPP_FOLLOWUP_TEMPLATE: 'quote_followup',\r\n  WHATSAPP_TEMPLATE_LANGUAGE: 'en',\r\n  WHATSAPP_SIGNATURE_REQUIRED: false,\r\n  DATE_ORDER: 'DMY',\r\n  PRIORITY_RULES_JSON: '',\r\n};\r\n\r\nconst BOOLEAN_KEYS = ['DEMO_MODE', 'REQUIRE_HUMAN_APPROVAL', 'AUTO_ACKNOWLEDGE', 'WHATSAPP_SIGNATURE_REQUIRED'];\r\n\r\nfunction readEnv(env, key) {\r\n  try {\r\n    const value = env ? env[key] : undefined;\r\n    return value === undefined || value === null || value === '' ? undefined : value;\r\n  } catch (_) {\r\n    // n8n throws when env access is blocked; fall back to defaults.\r\n    return undefined;\r\n  }\r\n}\r\n\r\nfunction toBool(value, fallback) {\r\n  if (value === undefined) return fallback;\r\n  if (typeof value === 'boolean') return value;\r\n  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());\r\n}\r\n\r\nfunction getConfig(env) {\r\n  const cfg = {};\r\n  for (const key of Object.keys(DEFAULTS)) {\r\n    const fallback = DEFAULTS[key];\r\n    const raw = readEnv(env, key);\r\n    if (BOOLEAN_KEYS.includes(key)) cfg[key] = toBool(raw, fallback);\r\n    else if (typeof fallback === 'number') {\r\n      const n = raw === undefined ? NaN : Number(raw);\r\n      cfg[key] = Number.isFinite(n) ? n : fallback;\r\n    } else cfg[key] = raw === undefined ? fallback : String(raw);\r\n  }\r\n  return cfg;\r\n}\r\n\r\n/** Reasoning-family models reject custom temperature; everything else gets a low one. */\r\nfunction supportsTemperature(model) {\r\n  return !/^(o\\d|gpt-5)/i.test(String(model || ''));\r\n}\r\n\r\nmodule.exports = { DEFAULTS, getConfig, supportsTemperature, toBool };\r\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"clarification\": __req(\"lib/clarification\"), \"config\": __req(\"lib/config\") };\n}\n"
+      },
+      "id": "ofwf050000000005-006",
+      "position": [
+        780,
+        50
+      ]
+    },
+    {
+      "name": "Send or Escalate",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "SEND",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "SEND"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "ESCALATE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ESCALATE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ofwf050000000005-007",
+      "position": [
+        1040,
+        50
+      ]
+    },
+    {
+      "name": "Deliver Clarification (WF12)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ofwf120000000012",
+          "mode": "id",
+          "cachedResultName": "WF12_QUOTE_DELIVERY"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ofwf050000000005-008",
+      "position": [
+        1300,
+        -40
+      ]
+    },
+    {
+      "name": "Mark Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Mark Payload\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst sent = $('Send or Escalate').all();\r\nreturn $input.all().map((res, idx) => {\r\n  const src = (sent[idx] || sent[0]).json;\r\n  return { json: { delivered: Boolean(res.json.delivered), db: { rfq_id: src.rfq_id, action: res.json.delivered ? 'SENT' : 'FAILED', clarification_key: res.json.delivered ? src.clarification_key : null, question: src.question, channel: res.json.channel } } };\r\n}).filter((i) => i.json.delivered);\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf050000000005-009",
+      "position": [
+        1560,
+        -40
+      ]
+    },
+    {
+      "name": "Escalation Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Escalation Payload\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn $input.all().map((i) => ({ json: { db: { rfq_id: i.json.rfq_id, action: 'ESCALATE', clarification_key: i.json.clarification_key } } }));\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf050000000005-010",
+      "position": [
+        1300,
+        160
+      ]
+    },
+    {
+      "name": "Record Clarification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_mark_clarification($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf050000000005-011",
+      "position": [
+        1820,
+        50
+      ]
+    }
+  ],
+  "connections": {
+    "When Called By Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every Minute": {
+      "main": [
+        [
+          {
+            "node": "Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare": {
+      "main": [
+        [
+          {
+            "node": "Claim Due Clarifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Due Clarifications": {
+      "main": [
+        [
+          {
+            "node": "Build Clarifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Clarifications": {
+      "main": [
+        [
+          {
+            "node": "Send or Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send or Escalate": {
+      "main": [
+        [
+          {
+            "node": "Deliver Clarification (WF12)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalation Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver Clarification (WF12)": {
+      "main": [
+        [
+          {
+            "node": "Mark Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Payload": {
+      "main": [
+        [
+          {
+            "node": "Record Clarification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation Payload": {
+      "main": [
+        [
+          {
+            "node": "Record Clarification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "ofwf990000000099"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

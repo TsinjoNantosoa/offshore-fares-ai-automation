@@ -1,0 +1,439 @@
+{
+  "id": "ofwf170000000017",
+  "name": "WF17_OPERATOR_ACTIONS",
+  "nodes": [
+    {
+      "name": "About WF17",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## WF17 – Operator actions\n`POST /webhook/ops/action` `{ action, rfq_number, operator, ... }`\nSTART_SEARCH · START_TICKETING · MARK_TICKETED (PNR) · RESOLVE_AFTER_SALES · MARK_LOST · CANCEL · CLOSE · REOPEN · CLEAR_HUMAN_FLAG · RESOLVE_ALERT · ACK_ALERT · RETRY_MESSAGE (dead letter) · RESEND_QUOTE (failed delivery)\nAll transitions go through the DB state machine and are audited with the operator name.",
+        "width": 620,
+        "height": 220,
+        "color": 7
+      },
+      "id": "ofwf170000000017-001",
+      "position": [
+        0,
+        -320
+      ]
+    },
+    {
+      "name": "Operator Action",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "of-ops-action-post",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ops/action",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ofOpsTokenCred01",
+          "name": "Ops Console Token"
+        }
+      },
+      "id": "ofwf170000000017-002",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Payload\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn [{ json: { db: $input.first().json.body || {} } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf170000000017-003",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Apply Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_operator_action($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf170000000017-004",
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "name": "Follow-on",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Follow-on\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst r = $input.first().json.r;\r\nconst req = $('Payload').first().json.db;\r\nlet next = 'NONE';\r\nif (r.ok && String(req.action).toUpperCase() === 'REOPEN') next = 'ROUTE';\r\nif (r.ok && String(req.action).toUpperCase() === 'RETRY_MESSAGE' && r.conversation_id) next = 'REPROCESS';\r\nif (r.ok && String(req.action).toUpperCase() === 'RESEND_QUOTE' && r.quote_id) next = 'DELIVER';\r\nreturn [{ json: { next, rfq_id: r.rfq_id, quote_id: r.quote_id || null, kind: 'QUOTE', conversation_id: r.conversation_id, http_status: r.ok ? 200 : 409, response: r } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf170000000017-005",
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "name": "Next",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "ROUTE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ROUTE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "REPROCESS",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "REPROCESS"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "DELIVER",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DELIVER"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "NONE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "NONE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ofwf170000000017-006",
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "name": "Route (WF09)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ofwf090000000009",
+          "mode": "id",
+          "cachedResultName": "WF09_FARE_DESK_ROUTER"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ofwf170000000017-007",
+      "position": [
+        1300,
+        -120
+      ]
+    },
+    {
+      "name": "Reprocess (WF06)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ofwf060000000006",
+          "mode": "id",
+          "cachedResultName": "WF06_RFQ_MANAGER"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "ofwf170000000017-008",
+      "position": [
+        1300,
+        40
+      ]
+    },
+    {
+      "name": "Resend Quote (WF12)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ofwf120000000012",
+          "mode": "id",
+          "cachedResultName": "WF12_QUOTE_DELIVERY"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ofwf170000000017-009",
+      "position": [
+        1300,
+        200
+      ]
+    },
+    {
+      "name": "Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Response\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn [{ json: { http_status: $('Follow-on').first().json.http_status, response: $('Follow-on').first().json.response } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf170000000017-010",
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response || $json) }}",
+        "options": {
+          "responseCode": "={{ $json.http_status || 200 }}"
+        }
+      },
+      "id": "ofwf170000000017-011",
+      "position": [
+        1820,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Operator Action": {
+      "main": [
+        [
+          {
+            "node": "Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload": {
+      "main": [
+        [
+          {
+            "node": "Apply Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Action": {
+      "main": [
+        [
+          {
+            "node": "Follow-on",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Follow-on": {
+      "main": [
+        [
+          {
+            "node": "Next",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next": {
+      "main": [
+        [
+          {
+            "node": "Route (WF09)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reprocess (WF06)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resend Quote (WF12)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route (WF09)": {
+      "main": [
+        [
+          {
+            "node": "Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resend Quote (WF12)": {
+      "main": [
+        [
+          {
+            "node": "Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reprocess (WF06)": {
+      "main": [
+        [
+          {
+            "node": "Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "ofwf990000000099"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

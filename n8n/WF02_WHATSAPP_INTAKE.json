@@ -1,0 +1,406 @@
+{
+  "id": "ofwf020000000002",
+  "name": "WF02_WHATSAPP_INTAKE",
+  "nodes": [
+    {
+      "name": "About WF02",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## WF02 – WhatsApp Business Cloud API\n`GET /webhook/whatsapp` – Meta verification handshake (hub.verify_token)\n`POST /webhook/whatsapp` – messages + delivery statuses. `X-Hub-Signature-256` is verified when `WHATSAPP_APP_SECRET` is set (mandatory when DEMO_MODE=false).\n\nOfficial Cloud API only – no WhatsApp Web automation.",
+        "width": 560,
+        "height": 220,
+        "color": 7
+      },
+      "id": "ofwf020000000002-001",
+      "position": [
+        0,
+        -340
+      ]
+    },
+    {
+      "name": "WhatsApp Verify (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "of-whatsapp-get",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "whatsapp",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "ofwf020000000002-002",
+      "position": [
+        0,
+        -80
+      ]
+    },
+    {
+      "name": "Check Verify Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Check Verify Token\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst res = OF.whatsapp.verifySubscription($input.first().json.query || {}, $env.WHATSAPP_VERIFY_TOKEN || '');\r\nreturn [{ json: { http_status: res.ok ? 200 : 403, challenge: res.ok ? res.challenge : 'Forbidden' } }];\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/whatsapp\": function (module, exports, require) {\n/**\n * WhatsApp Business Cloud API (official Meta Graph API) helpers.\n * No WhatsApp Web automation is used anywhere in this project.\n */\nconst { normalizePhone } = require('./text');\n\n/** GET verification handshake: hub.mode=subscribe & hub.verify_token must match. */\nfunction verifySubscription(query, verifyToken) {\n  const q = query || {};\n  const mode = q['hub.mode'];\n  const token = q['hub.verify_token'];\n  const challenge = q['hub.challenge'];\n  if (mode === 'subscribe' && verifyToken && token === verifyToken && challenge) return { ok: true, challenge: String(challenge) };\n  return { ok: false, challenge: null };\n}\n\n/**\n * X-Hub-Signature-256 check. `hmacHex(secret, body)` is injected so this module\n * stays free of Node built-ins (n8n Code nodes receive crypto explicitly).\n */\nfunction verifySignature(rawBody, header, appSecret, hmacHex) {\n  if (!appSecret) return { ok: false, reason: 'NO_APP_SECRET' };\n  if (!header || !/^sha256=[0-9a-f]{64}$/i.test(header)) return { ok: false, reason: 'MISSING_SIGNATURE' };\n  const expected = `sha256=${hmacHex(appSecret, rawBody)}`;\n  if (expected.length !== header.length) return { ok: false, reason: 'BAD_SIGNATURE' };\n  let diff = 0;\n  for (let i = 0; i < expected.length; i += 1) diff |= expected.charCodeAt(i) ^ header.toLowerCase().charCodeAt(i);\n  return diff === 0 ? { ok: true, reason: 'VALID' } : { ok: false, reason: 'BAD_SIGNATURE' };\n}\n\nfunction textOf(msg) {\n  switch (msg.type) {\n    case 'text': return msg.text && msg.text.body;\n    case 'button': return msg.button && msg.button.text;\n    case 'interactive': {\n      const i = msg.interactive || {};\n      return (i.button_reply && i.button_reply.title) || (i.list_reply && i.list_reply.title) || null;\n    }\n    default: return null;\n  }\n}\n\n/**\n * Parse a Cloud API webhook payload.\n * @returns {{ valid, messages: [], statuses: [], unsupported: [] }}\n */\nfunction parseWebhook(body) {\n  const out = { valid: false, messages: [], statuses: [], unsupported: [] };\n  if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) return out;\n  out.valid = true;\n  for (const entry of body.entry) {\n    for (const change of entry.changes || []) {\n      const value = change.value || {};\n      const contacts = value.contacts || [];\n      const phoneNumberId = value.metadata && value.metadata.phone_number_id;\n      for (const msg of value.messages || []) {\n        const contact = contacts.find((c) => c.wa_id === msg.from) || contacts[0] || {};\n        const text = textOf(msg);\n        const item = {\n          external_message_id: msg.id,\n          from: normalizePhone(msg.from),\n          profile_name: contact.profile ? contact.profile.name : null,\n          received_at: msg.timestamp ? new Date(Number(msg.timestamp) * 1000).toISOString() : new Date().toISOString(),\n          type: msg.type,\n          text: text || null,\n          context_message_id: msg.context ? msg.context.id : null,\n          phone_number_id: phoneNumberId || null,\n        };\n        if (text) out.messages.push(item);\n        else out.unsupported.push(item);\n      }\n      for (const st of value.statuses || []) {\n        out.statuses.push({\n          external_message_id: st.id,\n          status: String(st.status || '').toUpperCase(),\n          timestamp: st.timestamp ? new Date(Number(st.timestamp) * 1000).toISOString() : null,\n          recipient: normalizePhone(st.recipient_id),\n          errors: st.errors || null,\n        });\n      }\n    }\n  }\n  return out;\n}\n\nfunction sessionOpen(lastInboundAt, now) {\n  if (!lastInboundAt) return false;\n  const nowMs = now ? new Date(now).getTime() : Date.now();\n  return nowMs - new Date(lastInboundAt).getTime() < 24 * 3600 * 1000;\n}\n\nfunction buildTextMessage(to, body, replyToMessageId) {\n  const payload = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { preview_url: false, body: String(body).slice(0, 4096) } };\n  if (replyToMessageId) payload.context = { message_id: replyToMessageId };\n  return payload;\n}\n\n/** Template message (required outside the 24h customer-service window). Template must be approved in Meta Business Manager. */\nfunction buildTemplateMessage(to, name, language, bodyParams) {\n  return {\n    messaging_product: 'whatsapp',\n    to,\n    type: 'template',\n    template: {\n      name,\n      language: { code: language || 'en' },\n      components: bodyParams && bodyParams.length ? [{ type: 'body', parameters: bodyParams.map((t) => ({ type: 'text', text: String(t).slice(0, 1000) })) }] : [],\n    },\n  };\n}\n\nmodule.exports = { verifySubscription, verifySignature, parseWebhook, sessionOpen, buildTextMessage, buildTemplateMessage };\n\n  },\n  \"lib/text\": function (module, exports, require) {\n/** Text helpers: email clean-up, reference detection, small formatting utilities. */\n\nconst RFQ_RE = /\\bOFF-RFQ-(\\d{4})-(\\d{6})\\b/gi;\n\nfunction normalizeWhitespace(text) {\n  return String(text || '')\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/ /g, ' ')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\n/** Very small HTML -> text conversion for emails that only have an HTML part. */\nfunction htmlToText(html) {\n  return normalizeWhitespace(String(html || '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/(p|div|tr|li|h\\d)>/gi, '\\n')\n    .replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\"));\n}\n\nconst REPLY_MARKERS = [\n  /^On .{3,200}wrote:\\s*$/m,\n  /^-{2,}\\s*Original Message\\s*-{2,}/im,\n  /^-{2,}\\s*Forwarded message\\s*-{2,}/im,\n  /^From:\\s.+\\n(?:Sent|Date):\\s/m,\n  /^_{10,}\\s*$/m,\n];\nconst SIGNATURE_MARKERS = [/^--\\s*$/m, /^Sent from my (?:iPhone|iPad|Android|mobile|Galaxy).*$/im, /^Get Outlook for .*$/im];\nconst DISCLAIMER = /^(?:DISCLAIMER|CONFIDENTIALITY NOTICE|This (?:e-?mail|message) and any attachments? (?:is|are) confidential).*$/im;\nconst SIGN_OFF = /^(?:best regards|kind regards|warm regards|regards|best|thanks(?: (?:&|and) regards)?|thank you|cheers|sincerely|rgds|br)[,.!]?\\s*$/im;\n\n/**\n * Remove quoted replies, signatures and legal footers so only the new content is analysed.\n * Conservative: a sign-off is only cut when it sits in the last part of the message.\n */\nfunction stripEmailNoise(body) {\n  let text = normalizeWhitespace(body);\n  const cut = (re) => {\n    const m = re.exec(text);\n    if (m && m.index > 0) text = text.slice(0, m.index);\n  };\n  REPLY_MARKERS.forEach(cut);\n  text = text.split('\\n').filter((line) => !/^\\s*>/.test(line)).join('\\n');\n  SIGNATURE_MARKERS.forEach(cut);\n  cut(DISCLAIMER);\n  // Sign-off (\"Best regards,\") followed only by a few short lines (name, agency, phone) = signature block.\n  const signOff = SIGN_OFF.exec(text);\n  if (signOff && signOff.index > 0) {\n    const tail = text.slice(signOff.index).split('\\n');\n    if (tail.length <= 8 && tail.every((line) => line.length <= 80)) text = text.slice(0, signOff.index);\n  }\n  return normalizeWhitespace(text);\n}\n\nfunction findRfqNumbers(text) {\n  const out = new Set();\n  let m;\n  const re = new RegExp(RFQ_RE.source, 'gi');\n  while ((m = re.exec(String(text || ''))) !== null) out.add(`OFF-RFQ-${m[1]}-${m[2]}`);\n  return Array.from(out);\n}\n\n/** Booking reference / PNR (6 alphanumerics with at least one letter) introduced by a keyword. */\nfunction findBookingReference(text) {\n  const src = String(text || '');\n  const keyword = /\\b(?:PNR|booking(?:\\s+(?:ref(?:erence)?|no\\.?|number|code))?|ref(?:erence)?|record locator|locator)\\s*[:#-]?\\s*([A-Z0-9]{6})\\b/i.exec(src);\n  if (keyword && /[A-Z]/i.test(keyword[1]) && /^[A-Z0-9]+$/.test(keyword[1])) return keyword[1].toUpperCase();\n  return null;\n}\n\n/** \"John Carter <john@apextravel.example>\" -> { name, email } */\nfunction parseAddress(value) {\n  const src = String(value || '').trim();\n  const angle = /^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>\\s*$/.exec(src);\n  if (angle) return { name: angle[1].trim() || null, email: angle[2].trim().toLowerCase() };\n  const email = /[^\\s<>\"]+@[^\\s<>\"]+/.exec(src);\n  return { name: null, email: email ? email[0].toLowerCase() : null };\n}\n\nfunction emailDomain(email) {\n  const m = /@([^@\\s>]+)$/.exec(String(email || '').toLowerCase());\n  return m ? m[1] : null;\n}\n\n/** Digits-only E.164 representation (\"+44 7700-900123\" -> \"447700900123\"). */\nfunction normalizePhone(value) {\n  const digits = String(value || '').replace(/\\D/g, '');\n  return digits.length >= 7 ? digits : null;\n}\n\nfunction truncate(text, max) {\n  const s = String(text || '');\n  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;\n}\n\nfunction formatMoney(amount, currency) {\n  const n = Number(amount);\n  const hasCents = Math.round(n * 100) % 100 !== 0;\n  const formatted = n.toLocaleString('en-US', { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });\n  return `${String(currency || '').toUpperCase()} ${formatted}`.trim();\n}\n\nfunction listJoin(items) {\n  const list = items.filter(Boolean);\n  if (list.length <= 1) return list.join('');\n  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;\n}\n\nmodule.exports = {\n  normalizeWhitespace,\n  htmlToText,\n  stripEmailNoise,\n  findRfqNumbers,\n  findBookingReference,\n  parseAddress,\n  emailDomain,\n  normalizePhone,\n  truncate,\n  formatMoney,\n  listJoin,\n};\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"whatsapp\": __req(\"lib/whatsapp\") };\n}\n"
+      },
+      "id": "ofwf020000000002-003",
+      "position": [
+        260,
+        -80
+      ]
+    },
+    {
+      "name": "Return Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.challenge }}",
+        "options": {
+          "responseCode": "={{ $json.http_status || 200 }}"
+        }
+      },
+      "id": "ofwf020000000002-004",
+      "position": [
+        520,
+        -80
+      ]
+    },
+    {
+      "name": "WhatsApp Events (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "of-whatsapp-post",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "ofwf020000000002-005",
+      "position": [
+        0,
+        160
+      ]
+    },
+    {
+      "name": "Verify Signature & Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Verify Signature & Parse\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst item = $input.first();\r\nconst cfg = OF.config.getConfig($env);\r\nconst headers = item.json.headers || {};\r\nconst secret = $env.WHATSAPP_APP_SECRET || '';\r\nlet signature = 'NOT_CONFIGURED_DEMO';\r\nif (secret) {\r\n  const crypto = require('crypto');\r\n  const raw = item.binary && item.binary.data ? Buffer.from(item.binary.data.data, 'base64').toString('utf8') : JSON.stringify(item.json.body);\r\n  const check = OF.whatsapp.verifySignature(raw, headers['x-hub-signature-256'], secret, (s, b) => crypto.createHmac('sha256', s).update(b, 'utf8').digest('hex'));\r\n  if (!check.ok) return [{ json: { accepted: false, http_status: 401, response: { error: check.reason } } }];\r\n  signature = 'VALID';\r\n} else if (!cfg.DEMO_MODE || cfg.WHATSAPP_SIGNATURE_REQUIRED) {\r\n  return [{ json: { accepted: false, http_status: 401, response: { error: 'WHATSAPP_APP_SECRET_NOT_CONFIGURED' } } }];\r\n}\r\nconst parsed = OF.whatsapp.parseWebhook(item.json.body);\r\nif (!parsed.valid) return [{ json: { accepted: false, http_status: 400, response: { error: 'MALFORMED_WEBHOOK' } } }];\r\nreturn [{ json: { accepted: true, http_status: 200, signature, parsed, response: { received: true, messages: parsed.messages.length, statuses: parsed.statuses.length } } }];\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/whatsapp\": function (module, exports, require) {\n/**\n * WhatsApp Business Cloud API (official Meta Graph API) helpers.\n * No WhatsApp Web automation is used anywhere in this project.\n */\nconst { normalizePhone } = require('./text');\n\n/** GET verification handshake: hub.mode=subscribe & hub.verify_token must match. */\nfunction verifySubscription(query, verifyToken) {\n  const q = query || {};\n  const mode = q['hub.mode'];\n  const token = q['hub.verify_token'];\n  const challenge = q['hub.challenge'];\n  if (mode === 'subscribe' && verifyToken && token === verifyToken && challenge) return { ok: true, challenge: String(challenge) };\n  return { ok: false, challenge: null };\n}\n\n/**\n * X-Hub-Signature-256 check. `hmacHex(secret, body)` is injected so this module\n * stays free of Node built-ins (n8n Code nodes receive crypto explicitly).\n */\nfunction verifySignature(rawBody, header, appSecret, hmacHex) {\n  if (!appSecret) return { ok: false, reason: 'NO_APP_SECRET' };\n  if (!header || !/^sha256=[0-9a-f]{64}$/i.test(header)) return { ok: false, reason: 'MISSING_SIGNATURE' };\n  const expected = `sha256=${hmacHex(appSecret, rawBody)}`;\n  if (expected.length !== header.length) return { ok: false, reason: 'BAD_SIGNATURE' };\n  let diff = 0;\n  for (let i = 0; i < expected.length; i += 1) diff |= expected.charCodeAt(i) ^ header.toLowerCase().charCodeAt(i);\n  return diff === 0 ? { ok: true, reason: 'VALID' } : { ok: false, reason: 'BAD_SIGNATURE' };\n}\n\nfunction textOf(msg) {\n  switch (msg.type) {\n    case 'text': return msg.text && msg.text.body;\n    case 'button': return msg.button && msg.button.text;\n    case 'interactive': {\n      const i = msg.interactive || {};\n      return (i.button_reply && i.button_reply.title) || (i.list_reply && i.list_reply.title) || null;\n    }\n    default: return null;\n  }\n}\n\n/**\n * Parse a Cloud API webhook payload.\n * @returns {{ valid, messages: [], statuses: [], unsupported: [] }}\n */\nfunction parseWebhook(body) {\n  const out = { valid: false, messages: [], statuses: [], unsupported: [] };\n  if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) return out;\n  out.valid = true;\n  for (const entry of body.entry) {\n    for (const change of entry.changes || []) {\n      const value = change.value || {};\n      const contacts = value.contacts || [];\n      const phoneNumberId = value.metadata && value.metadata.phone_number_id;\n      for (const msg of value.messages || []) {\n        const contact = contacts.find((c) => c.wa_id === msg.from) || contacts[0] || {};\n        const text = textOf(msg);\n        const item = {\n          external_message_id: msg.id,\n          from: normalizePhone(msg.from),\n          profile_name: contact.profile ? contact.profile.name : null,\n          received_at: msg.timestamp ? new Date(Number(msg.timestamp) * 1000).toISOString() : new Date().toISOString(),\n          type: msg.type,\n          text: text || null,\n          context_message_id: msg.context ? msg.context.id : null,\n          phone_number_id: phoneNumberId || null,\n        };\n        if (text) out.messages.push(item);\n        else out.unsupported.push(item);\n      }\n      for (const st of value.statuses || []) {\n        out.statuses.push({\n          external_message_id: st.id,\n          status: String(st.status || '').toUpperCase(),\n          timestamp: st.timestamp ? new Date(Number(st.timestamp) * 1000).toISOString() : null,\n          recipient: normalizePhone(st.recipient_id),\n          errors: st.errors || null,\n        });\n      }\n    }\n  }\n  return out;\n}\n\nfunction sessionOpen(lastInboundAt, now) {\n  if (!lastInboundAt) return false;\n  const nowMs = now ? new Date(now).getTime() : Date.now();\n  return nowMs - new Date(lastInboundAt).getTime() < 24 * 3600 * 1000;\n}\n\nfunction buildTextMessage(to, body, replyToMessageId) {\n  const payload = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { preview_url: false, body: String(body).slice(0, 4096) } };\n  if (replyToMessageId) payload.context = { message_id: replyToMessageId };\n  return payload;\n}\n\n/** Template message (required outside the 24h customer-service window). Template must be approved in Meta Business Manager. */\nfunction buildTemplateMessage(to, name, language, bodyParams) {\n  return {\n    messaging_product: 'whatsapp',\n    to,\n    type: 'template',\n    template: {\n      name,\n      language: { code: language || 'en' },\n      components: bodyParams && bodyParams.length ? [{ type: 'body', parameters: bodyParams.map((t) => ({ type: 'text', text: String(t).slice(0, 1000) })) }] : [],\n    },\n  };\n}\n\nmodule.exports = { verifySubscription, verifySignature, parseWebhook, sessionOpen, buildTextMessage, buildTemplateMessage };\n\n  },\n  \"lib/text\": function (module, exports, require) {\n/** Text helpers: email clean-up, reference detection, small formatting utilities. */\n\nconst RFQ_RE = /\\bOFF-RFQ-(\\d{4})-(\\d{6})\\b/gi;\n\nfunction normalizeWhitespace(text) {\n  return String(text || '')\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/ /g, ' ')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\n/** Very small HTML -> text conversion for emails that only have an HTML part. */\nfunction htmlToText(html) {\n  return normalizeWhitespace(String(html || '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/(p|div|tr|li|h\\d)>/gi, '\\n')\n    .replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\"));\n}\n\nconst REPLY_MARKERS = [\n  /^On .{3,200}wrote:\\s*$/m,\n  /^-{2,}\\s*Original Message\\s*-{2,}/im,\n  /^-{2,}\\s*Forwarded message\\s*-{2,}/im,\n  /^From:\\s.+\\n(?:Sent|Date):\\s/m,\n  /^_{10,}\\s*$/m,\n];\nconst SIGNATURE_MARKERS = [/^--\\s*$/m, /^Sent from my (?:iPhone|iPad|Android|mobile|Galaxy).*$/im, /^Get Outlook for .*$/im];\nconst DISCLAIMER = /^(?:DISCLAIMER|CONFIDENTIALITY NOTICE|This (?:e-?mail|message) and any attachments? (?:is|are) confidential).*$/im;\nconst SIGN_OFF = /^(?:best regards|kind regards|warm regards|regards|best|thanks(?: (?:&|and) regards)?|thank you|cheers|sincerely|rgds|br)[,.!]?\\s*$/im;\n\n/**\n * Remove quoted replies, signatures and legal footers so only the new content is analysed.\n * Conservative: a sign-off is only cut when it sits in the last part of the message.\n */\nfunction stripEmailNoise(body) {\n  let text = normalizeWhitespace(body);\n  const cut = (re) => {\n    const m = re.exec(text);\n    if (m && m.index > 0) text = text.slice(0, m.index);\n  };\n  REPLY_MARKERS.forEach(cut);\n  text = text.split('\\n').filter((line) => !/^\\s*>/.test(line)).join('\\n');\n  SIGNATURE_MARKERS.forEach(cut);\n  cut(DISCLAIMER);\n  // Sign-off (\"Best regards,\") followed only by a few short lines (name, agency, phone) = signature block.\n  const signOff = SIGN_OFF.exec(text);\n  if (signOff && signOff.index > 0) {\n    const tail = text.slice(signOff.index).split('\\n');\n    if (tail.length <= 8 && tail.every((line) => line.length <= 80)) text = text.slice(0, signOff.index);\n  }\n  return normalizeWhitespace(text);\n}\n\nfunction findRfqNumbers(text) {\n  const out = new Set();\n  let m;\n  const re = new RegExp(RFQ_RE.source, 'gi');\n  while ((m = re.exec(String(text || ''))) !== null) out.add(`OFF-RFQ-${m[1]}-${m[2]}`);\n  return Array.from(out);\n}\n\n/** Booking reference / PNR (6 alphanumerics with at least one letter) introduced by a keyword. */\nfunction findBookingReference(text) {\n  const src = String(text || '');\n  const keyword = /\\b(?:PNR|booking(?:\\s+(?:ref(?:erence)?|no\\.?|number|code))?|ref(?:erence)?|record locator|locator)\\s*[:#-]?\\s*([A-Z0-9]{6})\\b/i.exec(src);\n  if (keyword && /[A-Z]/i.test(keyword[1]) && /^[A-Z0-9]+$/.test(keyword[1])) return keyword[1].toUpperCase();\n  return null;\n}\n\n/** \"John Carter <john@apextravel.example>\" -> { name, email } */\nfunction parseAddress(value) {\n  const src = String(value || '').trim();\n  const angle = /^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>\\s*$/.exec(src);\n  if (angle) return { name: angle[1].trim() || null, email: angle[2].trim().toLowerCase() };\n  const email = /[^\\s<>\"]+@[^\\s<>\"]+/.exec(src);\n  return { name: null, email: email ? email[0].toLowerCase() : null };\n}\n\nfunction emailDomain(email) {\n  const m = /@([^@\\s>]+)$/.exec(String(email || '').toLowerCase());\n  return m ? m[1] : null;\n}\n\n/** Digits-only E.164 representation (\"+44 7700-900123\" -> \"447700900123\"). */\nfunction normalizePhone(value) {\n  const digits = String(value || '').replace(/\\D/g, '');\n  return digits.length >= 7 ? digits : null;\n}\n\nfunction truncate(text, max) {\n  const s = String(text || '');\n  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;\n}\n\nfunction formatMoney(amount, currency) {\n  const n = Number(amount);\n  const hasCents = Math.round(n * 100) % 100 !== 0;\n  const formatted = n.toLocaleString('en-US', { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });\n  return `${String(currency || '').toUpperCase()} ${formatted}`.trim();\n}\n\nfunction listJoin(items) {\n  const list = items.filter(Boolean);\n  if (list.length <= 1) return list.join('');\n  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;\n}\n\nmodule.exports = {\n  normalizeWhitespace,\n  htmlToText,\n  stripEmailNoise,\n  findRfqNumbers,\n  findBookingReference,\n  parseAddress,\n  emailDomain,\n  normalizePhone,\n  truncate,\n  formatMoney,\n  listJoin,\n};\n\n  },\n  \"lib/config\": function (module, exports, require) {\n'use strict';\r\n/**\r\n * Typed runtime configuration.\r\n *\r\n * In n8n Code nodes this is called with `$env`; in tests with a plain object.\r\n * Only NON-SECRET settings are read here. Secrets (OpenAI key, WhatsApp token,\r\n * database password) live in n8n Credentials and are never visible to Code nodes.\r\n */\r\n\r\nconst DEFAULTS = {\r\n  DEMO_MODE: true,\r\n  REQUIRE_HUMAN_APPROVAL: true,\r\n  AUTO_ACKNOWLEDGE: true,\r\n  COMPANY_NAME: 'Offshore Fares',\r\n  COMPANY_SIGNATURE: 'Offshore Fares – Premium Fares Desk',\r\n  BUSINESS_TIMEZONE: 'UTC',\r\n  AI_PROVIDER: 'openai', // 'openai' | 'rules' (offline demo – deterministic fallback only)\r\n  OPENAI_MODEL: 'gpt-4.1-mini',\r\n  OPENAI_TEMPERATURE: 0,\r\n  OPENAI_FORMATTER_TEMPERATURE: 0.2,\r\n  AI_CONFIDENCE_THRESHOLD: 0.7,\r\n  CORRELATION_WINDOW_HOURS: 72,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_WHATSAPP: 45,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_EMAIL: 0,\r\n  MAX_CLARIFICATIONS: 2,\r\n  GROUP_MIN_PASSENGERS: 10,\r\n  FOLLOWUP_1_HOURS: 4,\r\n  FOLLOWUP_2_HOURS: 24,\r\n  MAX_FOLLOWUPS: 2,\r\n  SLA_NEW_MINUTES: 5,\r\n  SLA_READY_FOR_SEARCH_MINUTES: 10,\r\n  SLA_ASSIGNED_MINUTES: 15,\r\n  SLA_SEARCHING_MINUTES: 45,\r\n  SLA_FARES_FOUND_MINUTES: 10,\r\n  SLA_PENDING_APPROVAL_MINUTES: 10,\r\n  SLA_BOOKING_REQUEST_MINUTES: 5,\r\n  SLA_CHANGE_REQUEST_MINUTES: 15,\r\n  SLA_REFUND_REQUEST_MINUTES: 60,\r\n  SLA_CRITICAL_FACTOR: 0.5,\r\n  WHATSAPP_GRAPH_VERSION: 'v21.0',\r\n  WHATSAPP_PHONE_NUMBER_ID: '',\r\n  WHATSAPP_FOLLOWUP_TEMPLATE: 'quote_followup',\r\n  WHATSAPP_TEMPLATE_LANGUAGE: 'en',\r\n  WHATSAPP_SIGNATURE_REQUIRED: false,\r\n  DATE_ORDER: 'DMY',\r\n  PRIORITY_RULES_JSON: '',\r\n};\r\n\r\nconst BOOLEAN_KEYS = ['DEMO_MODE', 'REQUIRE_HUMAN_APPROVAL', 'AUTO_ACKNOWLEDGE', 'WHATSAPP_SIGNATURE_REQUIRED'];\r\n\r\nfunction readEnv(env, key) {\r\n  try {\r\n    const value = env ? env[key] : undefined;\r\n    return value === undefined || value === null || value === '' ? undefined : value;\r\n  } catch (_) {\r\n    // n8n throws when env access is blocked; fall back to defaults.\r\n    return undefined;\r\n  }\r\n}\r\n\r\nfunction toBool(value, fallback) {\r\n  if (value === undefined) return fallback;\r\n  if (typeof value === 'boolean') return value;\r\n  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());\r\n}\r\n\r\nfunction getConfig(env) {\r\n  const cfg = {};\r\n  for (const key of Object.keys(DEFAULTS)) {\r\n    const fallback = DEFAULTS[key];\r\n    const raw = readEnv(env, key);\r\n    if (BOOLEAN_KEYS.includes(key)) cfg[key] = toBool(raw, fallback);\r\n    else if (typeof fallback === 'number') {\r\n      const n = raw === undefined ? NaN : Number(raw);\r\n      cfg[key] = Number.isFinite(n) ? n : fallback;\r\n    } else cfg[key] = raw === undefined ? fallback : String(raw);\r\n  }\r\n  return cfg;\r\n}\r\n\r\n/** Reasoning-family models reject custom temperature; everything else gets a low one. */\r\nfunction supportsTemperature(model) {\r\n  return !/^(o\\d|gpt-5)/i.test(String(model || ''));\r\n}\r\n\r\nmodule.exports = { DEFAULTS, getConfig, supportsTemperature, toBool };\r\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"whatsapp\": __req(\"lib/whatsapp\"), \"config\": __req(\"lib/config\") };\n}\n"
+      },
+      "id": "ofwf020000000002-006",
+      "position": [
+        260,
+        160
+      ]
+    },
+    {
+      "name": "Acknowledge (200 fast)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response || $json) }}",
+        "options": {
+          "responseCode": "={{ $json.http_status || 200 }}"
+        }
+      },
+      "id": "ofwf020000000002-007",
+      "position": [
+        520,
+        160
+      ]
+    },
+    {
+      "name": "Split Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Split Events\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst j = $input.first().json;\r\nif (!j.accepted) return [];\r\nconst meta = { workflow: $workflow.name, execution_id: $execution.id, started_at: new Date().toISOString() };\r\nconst out = j.parsed.messages.map((m) => ({ json: { kind: 'message', db: Object.assign(OF.channels.normalizeWhatsApp(m), meta, { recipient: m.phone_number_id }) } }));\r\nif (j.parsed.statuses.length) out.push({ json: { kind: 'statuses', db: Object.assign({ statuses: j.parsed.statuses }, meta) } });\r\nreturn out;\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/channels\": function (module, exports, require) {\n/**\n * Channel adapters -> common normalized message format (section 9).\n * Everything downstream of intake is channel-independent.\n */\nconst { stripEmailNoise, htmlToText, parseAddress, normalizePhone, findRfqNumbers, normalizeWhitespace } = require('./text');\nconst { screenInjection } = require('./security');\n\nfunction baseMessage(channel) {\n  return {\n    channel,\n    external_message_id: null,\n    conversation_key: null,\n    contact_id: '',\n    agency_id: '',\n    sender: { name: null, email: null, phone: null },\n    message: { subject: null, text: '', text_raw: '', received_at: null },\n    attachments: [],\n    in_reply_to: null,\n    referenced_rfq_numbers: [],\n    security: { injection_suspected: false, signals: [] },\n  };\n}\n\nfunction finalize(msg) {\n  const all = `${msg.message.subject || ''}\\n${msg.message.text}`;\n  msg.referenced_rfq_numbers = findRfqNumbers(all);\n  const screen = screenInjection(all);\n  msg.security = { injection_suspected: screen.suspected, signals: screen.signals };\n  return msg;\n}\n\nfunction firstAddress(field) {\n  if (!field) return { name: null, email: null };\n  if (typeof field === 'string') return parseAddress(field);\n  if (Array.isArray(field.value) && field.value[0]) {\n    return { name: field.value[0].name || null, email: String(field.value[0].address || '').toLowerCase() || null };\n  }\n  if (field.text) return parseAddress(field.text);\n  return { name: null, email: null };\n}\n\n/**\n * Gmail Trigger output (simplify = false, mailparser format) or the demo\n * webhook payload { message_id, thread_id, from, subject, body, received_at }.\n */\nfunction normalizeEmail(item) {\n  const src = item || {};\n  const msg = baseMessage('email');\n  const isDemo = src.body !== undefined && src.from !== undefined && !src.headers;\n  const from = firstAddress(src.from);\n  msg.sender = { name: from.name, email: from.email, phone: null };\n  msg.external_message_id = isDemo ? src.message_id : src.id || src.messageId;\n  msg.conversation_key = isDemo ? src.thread_id || src.message_id : src.threadId || src.id;\n  const rawText = isDemo ? src.body : src.text || (src.html ? htmlToText(src.html) : src.snippet || '');\n  msg.message.subject = src.subject ? String(src.subject).slice(0, 500) : null;\n  msg.message.text_raw = normalizeWhitespace(rawText).slice(0, 20000);\n  msg.message.text = stripEmailNoise(rawText).slice(0, 8000) || msg.message.text_raw.slice(0, 8000);\n  msg.message.received_at = new Date(src.received_at || src.date || Date.now()).toISOString();\n  msg.in_reply_to = src.in_reply_to || (src.headers && (src.headers['in-reply-to'] || src.headers['In-Reply-To'])) || null;\n  const atts = Array.isArray(src.attachments) ? src.attachments : [];\n  msg.attachments = atts.slice(0, 20).map((a) => ({ filename: a.filename || a.name || null, content_type: a.contentType || a.mimeType || a.content_type || null, size: a.size || null }));\n  return finalize(msg);\n}\n\n/** One parsed WhatsApp message (from whatsapp.parseWebhook). */\nfunction normalizeWhatsApp(parsed) {\n  const msg = baseMessage('whatsapp');\n  msg.external_message_id = parsed.external_message_id;\n  msg.conversation_key = normalizePhone(parsed.from);\n  msg.sender = { name: parsed.profile_name || null, email: null, phone: normalizePhone(parsed.from) };\n  msg.message.text_raw = String(parsed.text || '').slice(0, 4096);\n  msg.message.text = normalizeWhitespace(parsed.text).slice(0, 4096);\n  msg.message.received_at = parsed.received_at;\n  msg.in_reply_to = parsed.context_message_id || null;\n  return finalize(msg);\n}\n\nfunction validateNormalized(msg) {\n  const errors = [];\n  if (!['email', 'whatsapp'].includes(msg.channel)) errors.push('channel');\n  if (!msg.external_message_id) errors.push('external_message_id');\n  if (!msg.conversation_key) errors.push('conversation_key');\n  if (!msg.sender.email && !msg.sender.phone) errors.push('sender');\n  if (!msg.message.text && !msg.message.subject) errors.push('message.text');\n  return { ok: errors.length === 0, errors };\n}\n\nmodule.exports = { normalizeEmail, normalizeWhatsApp, validateNormalized };\n\n  },\n  \"lib/text\": function (module, exports, require) {\n/** Text helpers: email clean-up, reference detection, small formatting utilities. */\n\nconst RFQ_RE = /\\bOFF-RFQ-(\\d{4})-(\\d{6})\\b/gi;\n\nfunction normalizeWhitespace(text) {\n  return String(text || '')\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/ /g, ' ')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\n/** Very small HTML -> text conversion for emails that only have an HTML part. */\nfunction htmlToText(html) {\n  return normalizeWhitespace(String(html || '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/(p|div|tr|li|h\\d)>/gi, '\\n')\n    .replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\"));\n}\n\nconst REPLY_MARKERS = [\n  /^On .{3,200}wrote:\\s*$/m,\n  /^-{2,}\\s*Original Message\\s*-{2,}/im,\n  /^-{2,}\\s*Forwarded message\\s*-{2,}/im,\n  /^From:\\s.+\\n(?:Sent|Date):\\s/m,\n  /^_{10,}\\s*$/m,\n];\nconst SIGNATURE_MARKERS = [/^--\\s*$/m, /^Sent from my (?:iPhone|iPad|Android|mobile|Galaxy).*$/im, /^Get Outlook for .*$/im];\nconst DISCLAIMER = /^(?:DISCLAIMER|CONFIDENTIALITY NOTICE|This (?:e-?mail|message) and any attachments? (?:is|are) confidential).*$/im;\nconst SIGN_OFF = /^(?:best regards|kind regards|warm regards|regards|best|thanks(?: (?:&|and) regards)?|thank you|cheers|sincerely|rgds|br)[,.!]?\\s*$/im;\n\n/**\n * Remove quoted replies, signatures and legal footers so only the new content is analysed.\n * Conservative: a sign-off is only cut when it sits in the last part of the message.\n */\nfunction stripEmailNoise(body) {\n  let text = normalizeWhitespace(body);\n  const cut = (re) => {\n    const m = re.exec(text);\n    if (m && m.index > 0) text = text.slice(0, m.index);\n  };\n  REPLY_MARKERS.forEach(cut);\n  text = text.split('\\n').filter((line) => !/^\\s*>/.test(line)).join('\\n');\n  SIGNATURE_MARKERS.forEach(cut);\n  cut(DISCLAIMER);\n  // Sign-off (\"Best regards,\") followed only by a few short lines (name, agency, phone) = signature block.\n  const signOff = SIGN_OFF.exec(text);\n  if (signOff && signOff.index > 0) {\n    const tail = text.slice(signOff.index).split('\\n');\n    if (tail.length <= 8 && tail.every((line) => line.length <= 80)) text = text.slice(0, signOff.index);\n  }\n  return normalizeWhitespace(text);\n}\n\nfunction findRfqNumbers(text) {\n  const out = new Set();\n  let m;\n  const re = new RegExp(RFQ_RE.source, 'gi');\n  while ((m = re.exec(String(text || ''))) !== null) out.add(`OFF-RFQ-${m[1]}-${m[2]}`);\n  return Array.from(out);\n}\n\n/** Booking reference / PNR (6 alphanumerics with at least one letter) introduced by a keyword. */\nfunction findBookingReference(text) {\n  const src = String(text || '');\n  const keyword = /\\b(?:PNR|booking(?:\\s+(?:ref(?:erence)?|no\\.?|number|code))?|ref(?:erence)?|record locator|locator)\\s*[:#-]?\\s*([A-Z0-9]{6})\\b/i.exec(src);\n  if (keyword && /[A-Z]/i.test(keyword[1]) && /^[A-Z0-9]+$/.test(keyword[1])) return keyword[1].toUpperCase();\n  return null;\n}\n\n/** \"John Carter <john@apextravel.example>\" -> { name, email } */\nfunction parseAddress(value) {\n  const src = String(value || '').trim();\n  const angle = /^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>\\s*$/.exec(src);\n  if (angle) return { name: angle[1].trim() || null, email: angle[2].trim().toLowerCase() };\n  const email = /[^\\s<>\"]+@[^\\s<>\"]+/.exec(src);\n  return { name: null, email: email ? email[0].toLowerCase() : null };\n}\n\nfunction emailDomain(email) {\n  const m = /@([^@\\s>]+)$/.exec(String(email || '').toLowerCase());\n  return m ? m[1] : null;\n}\n\n/** Digits-only E.164 representation (\"+44 7700-900123\" -> \"447700900123\"). */\nfunction normalizePhone(value) {\n  const digits = String(value || '').replace(/\\D/g, '');\n  return digits.length >= 7 ? digits : null;\n}\n\nfunction truncate(text, max) {\n  const s = String(text || '');\n  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;\n}\n\nfunction formatMoney(amount, currency) {\n  const n = Number(amount);\n  const hasCents = Math.round(n * 100) % 100 !== 0;\n  const formatted = n.toLocaleString('en-US', { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });\n  return `${String(currency || '').toUpperCase()} ${formatted}`.trim();\n}\n\nfunction listJoin(items) {\n  const list = items.filter(Boolean);\n  if (list.length <= 1) return list.join('');\n  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;\n}\n\nmodule.exports = {\n  normalizeWhitespace,\n  htmlToText,\n  stripEmailNoise,\n  findRfqNumbers,\n  findBookingReference,\n  parseAddress,\n  emailDomain,\n  normalizePhone,\n  truncate,\n  formatMoney,\n  listJoin,\n};\n\n  },\n  \"lib/security\": function (module, exports, require) {\n/**\n * Prompt-injection screening and secret redaction.\n *\n * Defence in depth – the real protections are architectural:\n *  - the model never receives secrets (keys live in n8n Credentials),\n *  - the model only returns schema-constrained JSON that code validates,\n *  - the model cannot trigger sends: delivery is decided by workflow logic + human approval.\n * This module adds detection (flag + audit + human review) and output scrubbing.\n */\n\nconst INJECTION_PATTERNS = [\n  { id: 'ignore_instructions', re: /\\b(ignore|disregard|forget|override)\\b[^.\\n]{0,40}\\b(instructions?|prompts?|rules?|guidelines?)\\b/i },\n  { id: 'reveal_secret', re: /\\b(show|reveal|print|give|send|tell|display|leak|share|output)\\b[^.\\n]{0,40}\\b(api[\\s_-]?keys?|secrets?|passwords?|tokens?|credentials?|system prompt|env(?:ironment)? variables?)\\b/i },\n  { id: 'role_override', re: /\\b(you are now|act as|pretend to be|from now on you|developer mode|jailbreak|DAN mode)\\b/i },\n  { id: 'system_markup', re: /(<\\/?(system|assistant|instructions?)>|\\[\\/?(INST|SYSTEM)\\]|^#{2,}\\s*(system|instruction))/im },\n  { id: 'tool_abuse', re: /\\b(execute|run)\\b[^.\\n]{0,30}\\b(command|shell|sql|code)\\b|\\bdrop\\s+table\\b/i },\n  { id: 'price_manipulation', re: /\\b(set|change|make)\\b[^.\\n]{0,30}\\b(price|fare)\\b[^.\\n]{0,20}\\b(to|=)\\s*(?:usd|\\$|eur|0)\\b/i },\n];\n\nconst SECRET_PATTERNS = [\n  /\\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\\b/g, // OpenAI-style keys\n  /\\bEAA[A-Za-z0-9]{20,}\\b/g, // Meta / WhatsApp access tokens\n  /\\bAIza[0-9A-Za-z_-]{30,}\\b/g, // Google API keys\n  /\\bya29\\.[0-9A-Za-z_-]{20,}\\b/g, // Google OAuth access tokens\n  /\\bBearer\\s+[A-Za-z0-9._-]{20,}\\b/gi,\n  /\\b(?:password|passwd|pwd|secret|api[_-]?key|token)\\s*[:=]\\s*\\S{6,}/gi,\n  /\\b(?:\\d[ -]?){13,19}\\b/g, // card-number-like digit runs\n];\n\nfunction screenInjection(text) {\n  const src = String(text || '');\n  const signals = INJECTION_PATTERNS.filter((p) => p.re.test(src)).map((p) => p.id);\n  return { suspected: signals.length > 0, signals };\n}\n\nfunction redactSecrets(value) {\n  let out = String(value === undefined || value === null ? '' : value);\n  for (const re of SECRET_PATTERNS) out = out.replace(re, '[REDACTED]');\n  return out;\n}\n\nfunction containsSecret(value) {\n  const src = String(value || '');\n  return SECRET_PATTERNS.some((re) => new RegExp(re.source, re.flags.replace('g', '')).test(src));\n}\n\n/** Deep-redact an object (used before logging errors / payloads). */\nfunction redactObject(value, depth) {\n  const d = depth || 0;\n  if (d > 6) return '[TRUNCATED]';\n  if (Array.isArray(value)) return value.slice(0, 50).map((v) => redactObject(v, d + 1));\n  if (value && typeof value === 'object') {\n    const out = {};\n    for (const [k, v] of Object.entries(value)) {\n      if (/(authorization|api[_-]?key|token|secret|password|cookie)/i.test(k)) out[k] = '[REDACTED]';\n      else out[k] = redactObject(v, d + 1);\n    }\n    return out;\n  }\n  if (typeof value === 'string') return redactSecrets(value).slice(0, 4000);\n  return value;\n}\n\n/**\n * Wrap untrusted content for the model. Closing tags inside the content are\n * neutralised so the message cannot \"escape\" its envelope.\n */\nfunction wrapUntrusted(text, tag) {\n  const name = tag || 'untrusted_message';\n  const safe = String(text || '').replace(new RegExp(`</?\\\\s*${name}\\\\s*>`, 'gi'), '[tag removed]');\n  return `<${name}>\\n${safe}\\n</${name}>`;\n}\n\nmodule.exports = { screenInjection, redactSecrets, redactObject, containsSecret, wrapUntrusted };\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"channels\": __req(\"lib/channels\") };\n}\n"
+      },
+      "id": "ofwf020000000002-008",
+      "position": [
+        780,
+        160
+      ]
+    },
+    {
+      "name": "Event Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "message",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "message"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "statuses",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "statuses"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ofwf020000000002-009",
+      "position": [
+        1040,
+        160
+      ]
+    },
+    {
+      "name": "Register Message (idempotent)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_register_inbound_message($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf020000000002-010",
+      "position": [
+        1300,
+        60
+      ]
+    },
+    {
+      "name": "Dispatch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Dispatch\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn $input.all().map((i) => ({ json: { conversation_id: i.json.r.status === 'REGISTERED' ? i.json.r.conversation_id : null, registration: i.json.r } }));\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf020000000002-011",
+      "position": [
+        1560,
+        60
+      ]
+    },
+    {
+      "name": "Process Conversation (WF06)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ofwf060000000006",
+          "mode": "id",
+          "cachedResultName": "WF06_RFQ_MANAGER"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "ofwf020000000002-012",
+      "position": [
+        1820,
+        60
+      ]
+    },
+    {
+      "name": "Update Delivery Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_update_delivery_status($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf020000000002-013",
+      "position": [
+        1300,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "WhatsApp Verify (GET)": {
+      "main": [
+        [
+          {
+            "node": "Check Verify Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Verify Token": {
+      "main": [
+        [
+          {
+            "node": "Return Challenge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Events (POST)": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature & Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature & Parse": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge (200 fast)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acknowledge (200 fast)": {
+      "main": [
+        [
+          {
+            "node": "Split Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Events": {
+      "main": [
+        [
+          {
+            "node": "Event Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event Type": {
+      "main": [
+        [
+          {
+            "node": "Register Message (idempotent)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Delivery Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Register Message (idempotent)": {
+      "main": [
+        [
+          {
+            "node": "Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Process Conversation (WF06)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "ofwf990000000099"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

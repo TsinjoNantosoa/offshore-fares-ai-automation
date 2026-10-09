@@ -1,0 +1,177 @@
+# Offshore Fares — local development / demo stack
+#   cp .env.example .env   (fill in)
+#   docker compose up -d
+# n8n:          http://localhost:5678
+# Ops console:  http://localhost:3000
+name: offshore-fares
+
+x-business-env: &business-env
+  DEMO_MODE: ${DEMO_MODE:-true}
+  REQUIRE_HUMAN_APPROVAL: ${REQUIRE_HUMAN_APPROVAL:-true}
+  AUTO_ACKNOWLEDGE: ${AUTO_ACKNOWLEDGE:-true}
+  BUSINESS_TIMEZONE: ${BUSINESS_TIMEZONE:-UTC}
+  COMPANY_SIGNATURE: ${COMPANY_SIGNATURE:-Offshore Fares – Premium Fares Desk}
+  AI_PROVIDER: ${AI_PROVIDER:-openai}
+  # Single default lives in lib/config.js – set OPENAI_MODEL in .env to override.
+  OPENAI_MODEL: ${OPENAI_MODEL:-}
+  AI_CONFIDENCE_THRESHOLD: ${AI_CONFIDENCE_THRESHOLD:-0.7}
+  CORRELATION_WINDOW_HOURS: ${CORRELATION_WINDOW_HOURS:-72}
+  CLARIFICATION_DEBOUNCE_SECONDS_WHATSAPP: ${CLARIFICATION_DEBOUNCE_SECONDS_WHATSAPP:-45}
+  CLARIFICATION_DEBOUNCE_SECONDS_EMAIL: ${CLARIFICATION_DEBOUNCE_SECONDS_EMAIL:-0}
+  MAX_CLARIFICATIONS: ${MAX_CLARIFICATIONS:-2}
+  GROUP_MIN_PASSENGERS: ${GROUP_MIN_PASSENGERS:-10}
+  PRIORITY_RULES_JSON: ${PRIORITY_RULES_JSON:-}
+  FOLLOWUP_1_HOURS: ${FOLLOWUP_1_HOURS:-4}
+  FOLLOWUP_2_HOURS: ${FOLLOWUP_2_HOURS:-24}
+  MAX_FOLLOWUPS: ${MAX_FOLLOWUPS:-2}
+  SLA_NEW_MINUTES: ${SLA_NEW_MINUTES:-5}
+  SLA_READY_FOR_SEARCH_MINUTES: ${SLA_READY_FOR_SEARCH_MINUTES:-10}
+  SLA_ASSIGNED_MINUTES: ${SLA_ASSIGNED_MINUTES:-15}
+  SLA_SEARCHING_MINUTES: ${SLA_SEARCHING_MINUTES:-45}
+  SLA_FARES_FOUND_MINUTES: ${SLA_FARES_FOUND_MINUTES:-10}
+  SLA_PENDING_APPROVAL_MINUTES: ${SLA_PENDING_APPROVAL_MINUTES:-10}
+  SLA_BOOKING_REQUEST_MINUTES: ${SLA_BOOKING_REQUEST_MINUTES:-5}
+  SLA_CHANGE_REQUEST_MINUTES: ${SLA_CHANGE_REQUEST_MINUTES:-15}
+  SLA_REFUND_REQUEST_MINUTES: ${SLA_REFUND_REQUEST_MINUTES:-60}
+  SLA_CRITICAL_FACTOR: ${SLA_CRITICAL_FACTOR:-0.5}
+  WHATSAPP_GRAPH_VERSION: ${WHATSAPP_GRAPH_VERSION:-v21.0}
+  WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+  WHATSAPP_FOLLOWUP_TEMPLATE: ${WHATSAPP_FOLLOWUP_TEMPLATE:-quote_followup}
+  WHATSAPP_TEMPLATE_LANGUAGE: ${WHATSAPP_TEMPLATE_LANGUAGE:-en}
+
+x-n8n-base: &n8n-base
+  image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-2.41.6}
+  environment: &n8n-env
+    <<: *business-env
+    DB_TYPE: postgresdb
+    DB_POSTGRESDB_HOST: postgres
+    DB_POSTGRESDB_PORT: 5432
+    DB_POSTGRESDB_DATABASE: n8n
+    DB_POSTGRESDB_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+    DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env}
+    GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-UTC}
+    TZ: ${GENERIC_TIMEZONE:-UTC}
+    N8N_HOST: ${N8N_HOST:-localhost}
+    N8N_PORT: 5678
+    N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+    # Public base URL used for webhooks (set N8N_WEBHOOK_URL=https://n8n.example.com/ in production)
+    WEBHOOK_URL: ${N8N_WEBHOOK_URL:-${N8N_PROTOCOL:-http}://${N8N_HOST:-localhost}:${N8N_PORT:-5678}/}
+    N8N_SECURE_COOKIE: "false"
+    N8N_DIAGNOSTICS_ENABLED: "false"
+    N8N_PERSONALIZATION_ENABLED: "false"
+    N8N_RUNNERS_TASK_TIMEOUT: "120"
+    # Code nodes read NON-secret business settings from env ($env.DEMO_MODE ...).
+    N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+    # WhatsApp webhook signature verification (HMAC-SHA256)
+    NODE_FUNCTION_ALLOW_BUILTIN: crypto
+    EXECUTIONS_DATA_PRUNE: "true"
+    EXECUTIONS_DATA_MAX_AGE: "336"
+  volumes:
+    - n8n_data:/home/node/.n8n
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-offshore_fares}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      CONSOLE_DB_PASSWORD: ${CONSOLE_DB_PASSWORD:?set CONSOLE_DB_PASSWORD in .env}
+      LOAD_DEMO_DATA: ${LOAD_DEMO_DATA:-true}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./database:/offshore/database:ro
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot: imports credentials (from the secrets in .env) and workflows, then publishes them.
+  n8n-init:
+    <<: *n8n-base
+    restart: "no"
+    entrypoint: ["/bin/sh", "/offshore-init/bootstrap.sh"]
+    environment:
+      <<: *n8n-env
+      POSTGRES_DB: ${POSTGRES_DB:-offshore_fares}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPS_API_TOKEN: ${OPS_API_TOKEN:?set OPS_API_TOKEN in .env}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID:-}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET:-}
+      N8N_FORCE_REIMPORT: ${N8N_FORCE_REIMPORT:-false}
+      # only used by the start-up configuration validation (lib/envCheck.js)
+      LOAD_DEMO_DATA: ${LOAD_DEMO_DATA:-true}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/offshore-workflows:ro
+      - ./docker/n8n-init:/offshore-init:ro
+      - ./lib:/offshore-lib:ro
+
+  n8n:
+    <<: *n8n-base
+    restart: unless-stopped
+    environment:
+      <<: *n8n-env
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz/readiness >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      n8n-init:
+        condition: service_completed_successfully
+
+  ops-console:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *business-env
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-offshore_fares}
+      PGUSER: ops_console
+      PGPASSWORD: ${CONSOLE_DB_PASSWORD}
+      N8N_WEBHOOK_BASE: http://n8n:5678/webhook
+      OPS_API_TOKEN: ${OPS_API_TOKEN}
+      CONSOLE_USER: ${CONSOLE_USER:-}
+      CONSOLE_PASSWORD: ${CONSOLE_PASSWORD:-}
+      PORT: 3000
+    ports:
+      - "${CONSOLE_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      postgres:
+        condition: service_healthy
+      n8n:
+        condition: service_started
+
+volumes:
+  pg_data:
+  n8n_data:

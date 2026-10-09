@@ -1,0 +1,563 @@
+{
+  "id": "ofwf120000000012",
+  "name": "WF12_QUOTE_DELIVERY",
+  "nodes": [
+    {
+      "name": "About WF12",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## WF12 – Delivery (quotes and all outbound messages)\nChannel = override › channel of the agent's latest message › contact preference. **One channel only** (no double-sending).\nEmail: reply in the same Gmail thread when known. WhatsApp: Cloud API; outside the 24 h session only an approved template may be sent.\nDEMO_MODE=true → delivery is **simulated** and recorded (`delivery_status = SIMULATED`).\nRecords the outbound message, quote `SENT`, RFQ `APPROVED → QUOTED → AWAITING_CLIENT`.",
+        "width": 640,
+        "height": 260,
+        "color": 7
+      },
+      "id": "ofwf120000000012-001",
+      "position": [
+        0,
+        -380
+      ]
+    },
+    {
+      "name": "When Called By Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "ofwf120000000012-002",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Load Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Load Payload\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn [{ json: { input: $input.first().json, db: { rfq_id: $input.first().json.rfq_id, quote_id: $input.first().json.quote_id || null } } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf120000000012-003",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Load Delivery Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_get_delivery_context($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf120000000012-004",
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "name": "Plan Delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Plan Delivery\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst cfg = OF.config.getConfig($env);\r\nconst ctx = $input.first().json.r;\r\nconst input = Object.assign({}, $('Load Payload').first().json.input);\r\nif (input.kind === 'QUOTE' && ctx.quote) {\r\n  // Quote texts always come from the approved quote version stored in the DB.\r\n  input.email = { subject: ctx.quote.email_subject, body: ctx.quote.email_body };\r\n  input.whatsapp = { body: ctx.quote.whatsapp_body };\r\n}\r\n// Human-approval gate: a quote is only delivered when its version is APPROVED (also enforced in of_record_outbound).\r\nconst quoteBlocked = input.kind === 'QUOTE' && (!ctx.quote || ctx.quote.status !== 'APPROVED');\r\nconst contact = (ctx && ctx.rfq && ctx.rfq.contact) || {};\r\nconst wa = ctx.whatsapp;\r\nconst email = ctx.email;\r\nconst preferred = input.channel_override || ctx.last_inbound_channel || contact.preferred_channel || ctx.rfq.source_channel || 'email';\r\nconst canEmail = Boolean(contact.email);\r\nconst canWa = Boolean(contact.whatsapp_phone || (wa && wa.phone));\r\nlet channel = preferred === 'whatsapp' && canWa ? 'whatsapp' : canEmail ? 'email' : canWa ? 'whatsapp' : null;\r\nlet text = channel === 'whatsapp' ? (input.whatsapp && input.whatsapp.body) : (input.email && input.email.body);\r\nconst subject = (input.email && input.email.subject) || `${ctx.rfq.rfq_number}`;\r\nlet template = null;\r\nif (channel === 'whatsapp' && !OF.whatsapp.sessionOpen(wa && wa.last_inbound_at, new Date())) {\r\n  if (input.kind === 'FOLLOWUP' && cfg.WHATSAPP_FOLLOWUP_TEMPLATE) template = { name: cfg.WHATSAPP_FOLLOWUP_TEMPLATE, language: cfg.WHATSAPP_TEMPLATE_LANGUAGE, params: [contact.first_name || 'there', ctx.rfq.rfq_number] };\r\n  else if (canEmail) { channel = 'email'; text = input.email && input.email.body; }\r\n  else channel = null;\r\n}\r\nconst to = channel === 'whatsapp' ? (contact.whatsapp_phone || wa.phone) : contact.email;\r\nlet mode = quoteBlocked || !channel || !text ? 'NONE' : cfg.DEMO_MODE ? 'SIMULATE' : channel === 'whatsapp' ? 'WHATSAPP' : email && email.last_inbound_external_id && !String(email.thread_id || '').startsWith('demo') ? 'EMAIL_REPLY' : 'EMAIL_NEW';\r\nconst waPayload = channel === 'whatsapp' ? (template ? OF.whatsapp.buildTemplateMessage(to, template.name, template.language, template.params) : OF.whatsapp.buildTextMessage(to, text)) : null;\r\nreturn [{ json: {\r\n  mode, channel, to, subject, text, template, wa_payload: waPayload,\r\n  wa_url: `https://graph.facebook.com/${cfg.WHATSAPP_GRAPH_VERSION}/${cfg.WHATSAPP_PHONE_NUMBER_ID}/messages`,\r\n  reply_to_message_id: email ? email.last_inbound_external_id : null,\r\n  conversation_id: channel === 'whatsapp' ? (wa && wa.conversation_id) : (email && email.conversation_id),\r\n  reason: quoteBlocked ? 'QUOTE_NOT_APPROVED' : !channel ? 'NO_USABLE_CHANNEL' : null,\r\n} }];\n\n// ======================================================================\n// Shared library – GENERATED from lib/ by scripts/build-workflows.js.\n// Do not edit here: edit lib/*.js, run `npm test` and `npm run build`.\n// ======================================================================\nfunction __lib() {\n  const __defs = {\n  \"lib/whatsapp\": function (module, exports, require) {\n/**\n * WhatsApp Business Cloud API (official Meta Graph API) helpers.\n * No WhatsApp Web automation is used anywhere in this project.\n */\nconst { normalizePhone } = require('./text');\n\n/** GET verification handshake: hub.mode=subscribe & hub.verify_token must match. */\nfunction verifySubscription(query, verifyToken) {\n  const q = query || {};\n  const mode = q['hub.mode'];\n  const token = q['hub.verify_token'];\n  const challenge = q['hub.challenge'];\n  if (mode === 'subscribe' && verifyToken && token === verifyToken && challenge) return { ok: true, challenge: String(challenge) };\n  return { ok: false, challenge: null };\n}\n\n/**\n * X-Hub-Signature-256 check. `hmacHex(secret, body)` is injected so this module\n * stays free of Node built-ins (n8n Code nodes receive crypto explicitly).\n */\nfunction verifySignature(rawBody, header, appSecret, hmacHex) {\n  if (!appSecret) return { ok: false, reason: 'NO_APP_SECRET' };\n  if (!header || !/^sha256=[0-9a-f]{64}$/i.test(header)) return { ok: false, reason: 'MISSING_SIGNATURE' };\n  const expected = `sha256=${hmacHex(appSecret, rawBody)}`;\n  if (expected.length !== header.length) return { ok: false, reason: 'BAD_SIGNATURE' };\n  let diff = 0;\n  for (let i = 0; i < expected.length; i += 1) diff |= expected.charCodeAt(i) ^ header.toLowerCase().charCodeAt(i);\n  return diff === 0 ? { ok: true, reason: 'VALID' } : { ok: false, reason: 'BAD_SIGNATURE' };\n}\n\nfunction textOf(msg) {\n  switch (msg.type) {\n    case 'text': return msg.text && msg.text.body;\n    case 'button': return msg.button && msg.button.text;\n    case 'interactive': {\n      const i = msg.interactive || {};\n      return (i.button_reply && i.button_reply.title) || (i.list_reply && i.list_reply.title) || null;\n    }\n    default: return null;\n  }\n}\n\n/**\n * Parse a Cloud API webhook payload.\n * @returns {{ valid, messages: [], statuses: [], unsupported: [] }}\n */\nfunction parseWebhook(body) {\n  const out = { valid: false, messages: [], statuses: [], unsupported: [] };\n  if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) return out;\n  out.valid = true;\n  for (const entry of body.entry) {\n    for (const change of entry.changes || []) {\n      const value = change.value || {};\n      const contacts = value.contacts || [];\n      const phoneNumberId = value.metadata && value.metadata.phone_number_id;\n      for (const msg of value.messages || []) {\n        const contact = contacts.find((c) => c.wa_id === msg.from) || contacts[0] || {};\n        const text = textOf(msg);\n        const item = {\n          external_message_id: msg.id,\n          from: normalizePhone(msg.from),\n          profile_name: contact.profile ? contact.profile.name : null,\n          received_at: msg.timestamp ? new Date(Number(msg.timestamp) * 1000).toISOString() : new Date().toISOString(),\n          type: msg.type,\n          text: text || null,\n          context_message_id: msg.context ? msg.context.id : null,\n          phone_number_id: phoneNumberId || null,\n        };\n        if (text) out.messages.push(item);\n        else out.unsupported.push(item);\n      }\n      for (const st of value.statuses || []) {\n        out.statuses.push({\n          external_message_id: st.id,\n          status: String(st.status || '').toUpperCase(),\n          timestamp: st.timestamp ? new Date(Number(st.timestamp) * 1000).toISOString() : null,\n          recipient: normalizePhone(st.recipient_id),\n          errors: st.errors || null,\n        });\n      }\n    }\n  }\n  return out;\n}\n\nfunction sessionOpen(lastInboundAt, now) {\n  if (!lastInboundAt) return false;\n  const nowMs = now ? new Date(now).getTime() : Date.now();\n  return nowMs - new Date(lastInboundAt).getTime() < 24 * 3600 * 1000;\n}\n\nfunction buildTextMessage(to, body, replyToMessageId) {\n  const payload = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { preview_url: false, body: String(body).slice(0, 4096) } };\n  if (replyToMessageId) payload.context = { message_id: replyToMessageId };\n  return payload;\n}\n\n/** Template message (required outside the 24h customer-service window). Template must be approved in Meta Business Manager. */\nfunction buildTemplateMessage(to, name, language, bodyParams) {\n  return {\n    messaging_product: 'whatsapp',\n    to,\n    type: 'template',\n    template: {\n      name,\n      language: { code: language || 'en' },\n      components: bodyParams && bodyParams.length ? [{ type: 'body', parameters: bodyParams.map((t) => ({ type: 'text', text: String(t).slice(0, 1000) })) }] : [],\n    },\n  };\n}\n\nmodule.exports = { verifySubscription, verifySignature, parseWebhook, sessionOpen, buildTextMessage, buildTemplateMessage };\n\n  },\n  \"lib/text\": function (module, exports, require) {\n/** Text helpers: email clean-up, reference detection, small formatting utilities. */\n\nconst RFQ_RE = /\\bOFF-RFQ-(\\d{4})-(\\d{6})\\b/gi;\n\nfunction normalizeWhitespace(text) {\n  return String(text || '')\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/ /g, ' ')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\n/** Very small HTML -> text conversion for emails that only have an HTML part. */\nfunction htmlToText(html) {\n  return normalizeWhitespace(String(html || '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/(p|div|tr|li|h\\d)>/gi, '\\n')\n    .replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\"));\n}\n\nconst REPLY_MARKERS = [\n  /^On .{3,200}wrote:\\s*$/m,\n  /^-{2,}\\s*Original Message\\s*-{2,}/im,\n  /^-{2,}\\s*Forwarded message\\s*-{2,}/im,\n  /^From:\\s.+\\n(?:Sent|Date):\\s/m,\n  /^_{10,}\\s*$/m,\n];\nconst SIGNATURE_MARKERS = [/^--\\s*$/m, /^Sent from my (?:iPhone|iPad|Android|mobile|Galaxy).*$/im, /^Get Outlook for .*$/im];\nconst DISCLAIMER = /^(?:DISCLAIMER|CONFIDENTIALITY NOTICE|This (?:e-?mail|message) and any attachments? (?:is|are) confidential).*$/im;\nconst SIGN_OFF = /^(?:best regards|kind regards|warm regards|regards|best|thanks(?: (?:&|and) regards)?|thank you|cheers|sincerely|rgds|br)[,.!]?\\s*$/im;\n\n/**\n * Remove quoted replies, signatures and legal footers so only the new content is analysed.\n * Conservative: a sign-off is only cut when it sits in the last part of the message.\n */\nfunction stripEmailNoise(body) {\n  let text = normalizeWhitespace(body);\n  const cut = (re) => {\n    const m = re.exec(text);\n    if (m && m.index > 0) text = text.slice(0, m.index);\n  };\n  REPLY_MARKERS.forEach(cut);\n  text = text.split('\\n').filter((line) => !/^\\s*>/.test(line)).join('\\n');\n  SIGNATURE_MARKERS.forEach(cut);\n  cut(DISCLAIMER);\n  // Sign-off (\"Best regards,\") followed only by a few short lines (name, agency, phone) = signature block.\n  const signOff = SIGN_OFF.exec(text);\n  if (signOff && signOff.index > 0) {\n    const tail = text.slice(signOff.index).split('\\n');\n    if (tail.length <= 8 && tail.every((line) => line.length <= 80)) text = text.slice(0, signOff.index);\n  }\n  return normalizeWhitespace(text);\n}\n\nfunction findRfqNumbers(text) {\n  const out = new Set();\n  let m;\n  const re = new RegExp(RFQ_RE.source, 'gi');\n  while ((m = re.exec(String(text || ''))) !== null) out.add(`OFF-RFQ-${m[1]}-${m[2]}`);\n  return Array.from(out);\n}\n\n/** Booking reference / PNR (6 alphanumerics with at least one letter) introduced by a keyword. */\nfunction findBookingReference(text) {\n  const src = String(text || '');\n  const keyword = /\\b(?:PNR|booking(?:\\s+(?:ref(?:erence)?|no\\.?|number|code))?|ref(?:erence)?|record locator|locator)\\s*[:#-]?\\s*([A-Z0-9]{6})\\b/i.exec(src);\n  if (keyword && /[A-Z]/i.test(keyword[1]) && /^[A-Z0-9]+$/.test(keyword[1])) return keyword[1].toUpperCase();\n  return null;\n}\n\n/** \"John Carter <john@apextravel.example>\" -> { name, email } */\nfunction parseAddress(value) {\n  const src = String(value || '').trim();\n  const angle = /^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>\\s*$/.exec(src);\n  if (angle) return { name: angle[1].trim() || null, email: angle[2].trim().toLowerCase() };\n  const email = /[^\\s<>\"]+@[^\\s<>\"]+/.exec(src);\n  return { name: null, email: email ? email[0].toLowerCase() : null };\n}\n\nfunction emailDomain(email) {\n  const m = /@([^@\\s>]+)$/.exec(String(email || '').toLowerCase());\n  return m ? m[1] : null;\n}\n\n/** Digits-only E.164 representation (\"+44 7700-900123\" -> \"447700900123\"). */\nfunction normalizePhone(value) {\n  const digits = String(value || '').replace(/\\D/g, '');\n  return digits.length >= 7 ? digits : null;\n}\n\nfunction truncate(text, max) {\n  const s = String(text || '');\n  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;\n}\n\nfunction formatMoney(amount, currency) {\n  const n = Number(amount);\n  const hasCents = Math.round(n * 100) % 100 !== 0;\n  const formatted = n.toLocaleString('en-US', { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });\n  return `${String(currency || '').toUpperCase()} ${formatted}`.trim();\n}\n\nfunction listJoin(items) {\n  const list = items.filter(Boolean);\n  if (list.length <= 1) return list.join('');\n  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;\n}\n\nmodule.exports = {\n  normalizeWhitespace,\n  htmlToText,\n  stripEmailNoise,\n  findRfqNumbers,\n  findBookingReference,\n  parseAddress,\n  emailDomain,\n  normalizePhone,\n  truncate,\n  formatMoney,\n  listJoin,\n};\n\n  },\n  \"lib/config\": function (module, exports, require) {\n'use strict';\r\n/**\r\n * Typed runtime configuration.\r\n *\r\n * In n8n Code nodes this is called with `$env`; in tests with a plain object.\r\n * Only NON-SECRET settings are read here. Secrets (OpenAI key, WhatsApp token,\r\n * database password) live in n8n Credentials and are never visible to Code nodes.\r\n */\r\n\r\nconst DEFAULTS = {\r\n  DEMO_MODE: true,\r\n  REQUIRE_HUMAN_APPROVAL: true,\r\n  AUTO_ACKNOWLEDGE: true,\r\n  COMPANY_NAME: 'Offshore Fares',\r\n  COMPANY_SIGNATURE: 'Offshore Fares – Premium Fares Desk',\r\n  BUSINESS_TIMEZONE: 'UTC',\r\n  AI_PROVIDER: 'openai', // 'openai' | 'rules' (offline demo – deterministic fallback only)\r\n  OPENAI_MODEL: 'gpt-4.1-mini',\r\n  OPENAI_TEMPERATURE: 0,\r\n  OPENAI_FORMATTER_TEMPERATURE: 0.2,\r\n  AI_CONFIDENCE_THRESHOLD: 0.7,\r\n  CORRELATION_WINDOW_HOURS: 72,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_WHATSAPP: 45,\r\n  CLARIFICATION_DEBOUNCE_SECONDS_EMAIL: 0,\r\n  MAX_CLARIFICATIONS: 2,\r\n  GROUP_MIN_PASSENGERS: 10,\r\n  FOLLOWUP_1_HOURS: 4,\r\n  FOLLOWUP_2_HOURS: 24,\r\n  MAX_FOLLOWUPS: 2,\r\n  SLA_NEW_MINUTES: 5,\r\n  SLA_READY_FOR_SEARCH_MINUTES: 10,\r\n  SLA_ASSIGNED_MINUTES: 15,\r\n  SLA_SEARCHING_MINUTES: 45,\r\n  SLA_FARES_FOUND_MINUTES: 10,\r\n  SLA_PENDING_APPROVAL_MINUTES: 10,\r\n  SLA_BOOKING_REQUEST_MINUTES: 5,\r\n  SLA_CHANGE_REQUEST_MINUTES: 15,\r\n  SLA_REFUND_REQUEST_MINUTES: 60,\r\n  SLA_CRITICAL_FACTOR: 0.5,\r\n  WHATSAPP_GRAPH_VERSION: 'v21.0',\r\n  WHATSAPP_PHONE_NUMBER_ID: '',\r\n  WHATSAPP_FOLLOWUP_TEMPLATE: 'quote_followup',\r\n  WHATSAPP_TEMPLATE_LANGUAGE: 'en',\r\n  WHATSAPP_SIGNATURE_REQUIRED: false,\r\n  DATE_ORDER: 'DMY',\r\n  PRIORITY_RULES_JSON: '',\r\n};\r\n\r\nconst BOOLEAN_KEYS = ['DEMO_MODE', 'REQUIRE_HUMAN_APPROVAL', 'AUTO_ACKNOWLEDGE', 'WHATSAPP_SIGNATURE_REQUIRED'];\r\n\r\nfunction readEnv(env, key) {\r\n  try {\r\n    const value = env ? env[key] : undefined;\r\n    return value === undefined || value === null || value === '' ? undefined : value;\r\n  } catch (_) {\r\n    // n8n throws when env access is blocked; fall back to defaults.\r\n    return undefined;\r\n  }\r\n}\r\n\r\nfunction toBool(value, fallback) {\r\n  if (value === undefined) return fallback;\r\n  if (typeof value === 'boolean') return value;\r\n  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());\r\n}\r\n\r\nfunction getConfig(env) {\r\n  const cfg = {};\r\n  for (const key of Object.keys(DEFAULTS)) {\r\n    const fallback = DEFAULTS[key];\r\n    const raw = readEnv(env, key);\r\n    if (BOOLEAN_KEYS.includes(key)) cfg[key] = toBool(raw, fallback);\r\n    else if (typeof fallback === 'number') {\r\n      const n = raw === undefined ? NaN : Number(raw);\r\n      cfg[key] = Number.isFinite(n) ? n : fallback;\r\n    } else cfg[key] = raw === undefined ? fallback : String(raw);\r\n  }\r\n  return cfg;\r\n}\r\n\r\n/** Reasoning-family models reject custom temperature; everything else gets a low one. */\r\nfunction supportsTemperature(model) {\r\n  return !/^(o\\d|gpt-5)/i.test(String(model || ''));\r\n}\r\n\r\nmodule.exports = { DEFAULTS, getConfig, supportsTemperature, toBool };\r\n\n  }\n  };\n  const __cache = {};\n  function __resolve(from, req) {\n    const parts = from.split('/').slice(0, -1);\n    for (const seg of req.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }\n    return parts.join('/').replace(/\\.js$/, '');\n  }\n  function __req(key) {\n    if (__cache[key]) return __cache[key].exports;\n    const module = { exports: {} };\n    __cache[key] = module;\n    __defs[key](module, module.exports, (r) => __req(__resolve(key, r)));\n    return module.exports;\n  }\n  return { \"whatsapp\": __req(\"lib/whatsapp\"), \"config\": __req(\"lib/config\") };\n}\n"
+      },
+      "id": "ofwf120000000012-005",
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "name": "Delivery Mode",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "SIMULATE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "SIMULATE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "EMAIL_REPLY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "EMAIL_REPLY"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "EMAIL_NEW",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "EMAIL_NEW"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "WHATSAPP",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "WHATSAPP"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "NONE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "NONE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ofwf120000000012-006",
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "name": "Simulate Delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Simulate Delivery\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn [{ json: { delivery_status: 'SIMULATED', external_message_id: `sim-${$execution.id}-${Date.now()}` } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf120000000012-007",
+      "position": [
+        1300,
+        -300
+      ]
+    },
+    {
+      "name": "Gmail Reply In Thread",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "parameters": {
+        "resource": "message",
+        "operation": "reply",
+        "messageId": "={{ $json.reply_to_message_id }}",
+        "emailType": "text",
+        "message": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false,
+          "replyToSenderOnly": true
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ofGmailCred00001",
+          "name": "Gmail (Offshore Fares)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "id": "ofwf120000000012-008",
+      "position": [
+        1300,
+        -150
+      ]
+    },
+    {
+      "name": "Gmail Send",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ofGmailCred00001",
+          "name": "Gmail (Offshore Fares)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "id": "ofwf120000000012-009",
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "name": "WhatsApp Cloud API Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.wa_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.wa_payload) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ofWhatsAppCred01",
+          "name": "WhatsApp Cloud API"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "id": "ofwf120000000012-010",
+      "position": [
+        1300,
+        150
+      ]
+    },
+    {
+      "name": "No Channel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// No Channel\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nreturn [{ json: { delivery_status: 'FAILED', error: { message: $('Plan Delivery').first().json.reason || 'NO_TEXT' } } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf120000000012-011",
+      "position": [
+        1300,
+        300
+      ]
+    },
+    {
+      "name": "Record Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Record Payload\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst plan = $('Plan Delivery').first().json;\r\nconst input = $('Load Payload').first().json.input;\r\nconst res = $input.first().json;\r\nlet status = res.delivery_status;\r\nlet externalId = res.external_message_id || null;\r\nlet error = null;\r\nif (!status) {\r\n  if (res.error) { status = 'FAILED'; error = typeof res.error === 'string' ? res.error : (res.error.message || JSON.stringify(res.error)); }\r\n  else { status = 'SENT'; externalId = res.id || (res.messages && res.messages[0] && res.messages[0].id) || null; }\r\n} else if (res.error) error = res.error.message;\r\nreturn [{ json: { db: {\r\n  rfq_id: input.rfq_id, quote_id: input.quote_id || null, kind: input.kind, channel: plan.channel || 'email', conversation_id: plan.conversation_id || null,\r\n  recipient: plan.to, subject: plan.channel === 'email' ? plan.subject : null, content: plan.text || '', external_message_id: externalId,\r\n  delivery_status: status, delivery_error: error ? String(error).slice(0, 1000) : null, template: plan.template,\r\n} } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf120000000012-012",
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "name": "Record Outbound",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT of_record_outbound($1::jsonb) AS r;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.db || {}) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "ofPostgresCred01",
+          "name": "Offshore Fares DB"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "id": "ofwf120000000012-013",
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "name": "Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Output\n// Logic below uses the shared library (OF.*) bundled at the end of this node.\nconst OF = __lib();\nconst r = $input.first().json.r;\r\nconst plan = $('Record Payload').first().json.db;\r\nreturn [{ json: { delivered: Boolean(r.ok), delivery_status: r.ok ? plan.delivery_status : 'BLOCKED_OR_FAILED', channel: plan.channel, message_id: r.message_id || null, rfq_status: r.rfq_status, error: r.error || plan.delivery_error } }];\n\nfunction __lib() { return {}; }\n"
+      },
+      "id": "ofwf120000000012-014",
+      "position": [
+        2080,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "When Called By Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Payload": {
+      "main": [
+        [
+          {
+            "node": "Load Delivery Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Delivery Context": {
+      "main": [
+        [
+          {
+            "node": "Plan Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Delivery": {
+      "main": [
+        [
+          {
+            "node": "Delivery Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delivery Mode": {
+      "main": [
+        [
+          {
+            "node": "Simulate Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail Reply In Thread",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "WhatsApp Cloud API Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simulate Delivery": {
+      "main": [
+        [
+          {
+            "node": "Record Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Reply In Thread": {
+      "main": [
+        [
+          {
+            "node": "Record Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Send": {
+      "main": [
+        [
+          {
+            "node": "Record Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Cloud API Send": {
+      "main": [
+        [
+          {
+            "node": "Record Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Channel": {
+      "main": [
+        [
+          {
+            "node": "Record Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Payload": {
+      "main": [
+        [
+          {
+            "node": "Record Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Outbound": {
+      "main": [
+        [
+          {
+            "node": "Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "ofwf990000000099"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
