@@ -4,7 +4,9 @@
   "private": true,
   "description": "Offshore Fares – AI Travel Operations Orchestrator (n8n + PostgreSQL + OpenAI) – POC",
   "license": "UNLICENSED",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "demo": "node scripts/demo.js",
     "demo:step": "node scripts/demo.js --step",
@@ -22,6 +24,11 @@
     "config:check": "node scripts/check-config.js",
     "build": "node scripts/build-workflows.js",
     "build:seed": "node scripts/generate-seed.js",
-    "workflows:reimport": "node scripts/stack.js reimport"
+    "workflows:reimport": "node scripts/stack.js reimport",
+    "db:init": "node scripts/db.js init",
+    "db:check": "node scripts/db.js check",
+    "db:seed": "node scripts/db.js seed",
+    "db:reset-demo": "node scripts/db.js reset-demo",
+    "db:test": "node scripts/db.js test"
   }
 }

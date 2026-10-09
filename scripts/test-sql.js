@@ -8,7 +8,7 @@ const { psqlFile } = require('./lib/ops');
 
 const r = psqlFile('/offshore/database/tests/api_flow_test.sql');
 const out = `${r.stdout || ''}${r.stderr || ''}`;
-const notices = out.split('\n').map((l) => (/NOTICE:\s+(.*)$/.exec(l) || [])[1]).filter(Boolean);
+const notices = out.split(/\r?\n/).map((l) => (/NOTICE:\s+(.*)$/.exec(l) || [])[1]).filter(Boolean);
 notices.forEach((n) => console.log(`  ${n.startsWith('ALL') ? '✔' : '·'} ${n}`));
 const errors = out.split('\n').filter((l) => /ERROR:/.test(l));
 if (r.status !== 0 || errors.length || !notices.some((n) => n.startsWith('ALL SQL API TESTS PASSED'))) {

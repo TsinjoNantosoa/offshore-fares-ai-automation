@@ -64,3 +64,11 @@ test('messages never contain secret values', () => {
   const r = validateEnvironment(Object.assign({}, prodEnv, { OPS_API_TOKEN: 'short-secret' }), 'all');
   assert.ok(r.errors.every((e) => !e.includes('short-secret')));
 });
+
+test('remote database (Neon): DATABASE_URL replaces PG* for the console, SSL cannot be disabled', () => {
+  const ok = validateEnvironment({ DEMO_MODE: 'true', OPS_API_TOKEN: 'x', DATABASE_URL: 'postgresql://u:p@host/db?sslmode=require' }, 'console');
+  assert.equal(ok.ok, true, ok.errors.join('; '));
+  const bad = validateEnvironment({ DEMO_MODE: 'true', OPS_API_TOKEN: 'x', DATABASE_URL: 'postgresql://u:p@host/db?sslmode=disable' }, 'console');
+  assert.ok(bad.errors.some((e) => /SSL/.test(e)));
+  assert.ok(bad.errors.every((e) => !e.includes('u:p@')), 'never echoes the URL');
+});

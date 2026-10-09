@@ -179,6 +179,7 @@ All services have health checks (`docker compose ps` → *healthy*). Console: `G
 | `npm run smoke:openai` (`:stack`) | real OpenAI check with your key (key never printed) |
 | `npm run config:check` · `npm run security:scan` | configuration rules · exposed-secret scan |
 | `npm run build` · `npm run workflows:reimport` | regenerate `n8n/*.json` · re-import them into n8n |
+| `npm run db:init` · `db:check` · `db:test` · `db:seed` · `db:reset-demo` | initialise / verify a remote PostgreSQL such as Neon via `DATABASE_URL` ([docs/NEON_SETUP.md](docs/NEON_SETUP.md)) |
 
 | URL | |
 |---|---|
