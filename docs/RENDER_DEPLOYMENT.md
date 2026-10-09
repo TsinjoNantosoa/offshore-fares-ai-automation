@@ -15,13 +15,13 @@ Only the console runs on Render. n8n stays on the VPS, and the business database
 | Service Type | Web Service |
 | Runtime | Docker |
 | Root Directory | *(empty)* |
-| Dockerfile Path | `./dashboard/Dockerfile` |
+| Dockerfile Path | `./Dockerfile` (default – the Dockerfile is at the repository root) |
 | Docker Context | `.` |
 | Health Check | `/api/health` |
 | Build Command | *(empty)* |
 | Start Command | *(empty)* |
 
-The image copies `dashboard/` (server + public), `lib/` and `demo/` only. `.env`, `n8n/`, `database/`, `docs/` and `tests/` are excluded by `.dockerignore`, so no secret is baked into the image. The server listens on Render's `PORT` (fallback 3000 locally).
+The root `Dockerfile` builds the ops console image (it is NOT the n8n image). It copies `dashboard/` (server + public), `lib/` and `demo/` only. `.env`, `n8n/`, `database/`, `docs/` and `tests/` are excluded by `.dockerignore`, so no secret is baked into the image. The server listens on Render's `PORT` (fallback 3000 locally).
 
 ## Environment variables (Render → Environment)
 
