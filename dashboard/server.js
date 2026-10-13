@@ -117,7 +117,7 @@ async function n8n(pathName, payload, { auth = true } = {}) {
 // read models
 // ---------------------------------------------------------------------------
 async function summary() {
-  const [today, open, sla, timing, conversion, channels, cabins, routes, agencies, priority, ai, automation] = await Promise.all([
+  const [today, open, sla, timing, conversion, channels, cabins, routes, agencies, priority, ai, automation, totals] = await Promise.all([
     q(`SELECT status, count(*)::int AS n FROM rfqs WHERE created_at >= date_trunc('day', now()) GROUP BY status`),
     q(`SELECT status, count(*)::int AS n FROM rfqs GROUP BY status`),
     one(`SELECT count(*) FILTER (WHERE sla_breached AND status NOT IN ('CLOSED','CANCELLED','LOST','TICKETED'))::int AS open_breached,
@@ -138,6 +138,7 @@ async function summary() {
                 count(*) FILTER (WHERE direction = 'OUTBOUND' AND created_at > now() - interval '24 hours')::int AS outbound_24h,
                 count(*) FILTER (WHERE processing_status = 'DEAD_LETTER')::int AS dead_letters
            FROM messages`),
+    one(`SELECT count(*) FILTER (WHERE created_at > now() - interval '7 days')::int AS week, count(*)::int AS total FROM rfqs`),
   ]);
   const byStatus = (rows) => Object.fromEntries(rows.map((r) => [r.status, r.n]));
   return {
@@ -159,6 +160,7 @@ async function summary() {
     by_priority: priority,
     extraction_sources: ai,
     automation,
+    totals,
   };
 }
 
@@ -248,6 +250,11 @@ const outbox = () => q(`
   SELECT m.id, m.channel, m.kind, m.recipient, m.subject, m.content, m.delivery_status, m.sent_at, r.rfq_number
     FROM messages m LEFT JOIN rfqs r ON r.id = m.rfq_id WHERE m.direction = 'OUTBOUND' ORDER BY m.created_at DESC LIMIT 40`);
 
+// Business audit trail (most recent first) – read-only feed for the Activity page.
+const auditFeed = () => q(`
+  SELECT a.action, a.actor_type, a.actor_id, a.metadata, a.created_at, r.rfq_number
+    FROM audit_logs a LEFT JOIN rfqs r ON r.id = a.rfq_id ORDER BY a.created_at DESC, a.id DESC LIMIT 80`);
+
 const events = () => q(`
   SELECT e.workflow, e.event, e.status, e.duration_ms, e.details, e.created_at, r.rfq_number
     FROM workflow_events e LEFT JOIN rfqs r ON r.id = e.rfq_id ORDER BY e.id DESC LIMIT 60`);
@@ -318,6 +325,7 @@ async function handle(req, res) {
       if (p === '/api/alerts') return send(res, 200, await alerts());
       if (p === '/api/outbox') return send(res, 200, await outbox());
       if (p === '/api/events') return send(res, 200, await events());
+      if (p === '/api/audit') return send(res, 200, await auditFeed());
       if (p === '/api/dead-letters') return send(res, 200, await deadLetters());
       if (p === '/api/contacts') return send(res, 200, await contacts());
       if (p === '/api/config') return send(res, 200, { demo_mode: cfg.DEMO_MODE, require_human_approval: cfg.REQUIRE_HUMAN_APPROVAL, ai_provider: cfg.AI_PROVIDER, model: cfg.OPENAI_MODEL, timezone: cfg.BUSINESS_TIMEZONE });

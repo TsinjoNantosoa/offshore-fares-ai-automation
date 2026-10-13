@@ -145,7 +145,7 @@ services:
   ops-console:
     build:
       context: .
-      dockerfile: dashboard/Dockerfile
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       <<: *business-env
