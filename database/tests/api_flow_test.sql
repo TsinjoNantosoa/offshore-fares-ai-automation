@@ -11,6 +11,7 @@ DO $$
 DECLARE
   r jsonb; v_msg uuid; v_conv uuid; v_rfq uuid; v_quote uuid; v_new_quote uuid; v_status text; v_ok boolean; v_count int;
   v_john uuid;   -- test agent created below (independent of the demo data)
+  v_orphan uuid;
   v_agency uuid;
 BEGIN
   INSERT INTO agencies (name, code, email_domain, priority_level) VALUES ('QA Test Agency', 'QATEST', 'qa-agency.example', 'VIP') RETURNING id INTO v_agency;
@@ -134,7 +135,40 @@ BEGIN
   RAISE NOTICE '12. no follow-ups once booking is requested';
   ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(of_followup_candidates('{}')) c WHERE c->>'rfq_id' = v_rfq::text), 'excluded from candidates';
 
-  RAISE NOTICE '13. after-sales: change request finds the ticketed booking by PNR';
+  RAISE NOTICE '13. after-sales: linked case preserves parent context and requested dates';
+  r := of_create_after_sales_case(jsonb_build_object(
+    'workflow', 'test', 'intent', 'CHANGE_REQUEST', 'parent_rfq_id', v_rfq,
+    'contact_id', v_john, 'agency_id', v_agency, 'conversation_id', v_conv,
+    'requested_departure_date', '2026-11-18', 'clarification_required', false,
+    'summary', 'change dates to 18th', 'client_message', 'change dates to 18th', 'channel', 'email'));
+  ASSERT (r->>'created')::boolean AND r->>'status' = 'CHANGE_REQUESTED', 'new linked after-sales case created';
+  ASSERT (r->>'parent_rfq_id')::uuid = v_rfq AND r->>'parent_rfq_number' IS NOT NULL, 'parent identifiers retained';
+  ASSERT r->>'requested_departure_date' = '2026-11-18', 'requested departure retained';
+  ASSERT (SELECT related_rfq_id = v_rfq AND origin_iata = 'BOM' AND destination_iata = 'LHR'
+            AND cabin = 'BUSINESS' AND adults = 3 AND requires_human
+            AND selected_option_id IS NULL
+            AND requirements->'passengers'->>'adults' = '3'
+            AND requirements->'original'->>'parent_rfq_id' = v_rfq::text
+            AND requirements->'original'->>'departure_date' = '2026-11-17'
+            AND requirements->'original'->>'return_date' = '2026-11-25'
+            AND requirements->'original'->'selected_option'->>'code' = 'OPT-002'
+          FROM rfqs WHERE id = (r->>'rfq_id')::uuid), 'route, passengers, cabin and original context copied';
+
+  RAISE NOTICE '14. after-sales: missing parent is explicit and no date is invented';
+  INSERT INTO contacts (agency_id, first_name, last_name, email)
+  VALUES (v_agency, 'Orphan', 'Tester', 'orphan.agent@qa-agency.example') RETURNING id INTO v_orphan;
+  r := of_create_after_sales_case(jsonb_build_object(
+    'workflow', 'test', 'intent', 'CANCELLATION', 'contact_id', v_orphan, 'agency_id', v_agency,
+    'booking_reference', 'NOBOOK', 'clarification_required', false,
+    'summary', 'cancel booking NOBOOK', 'client_message', 'cancel booking NOBOOK', 'channel', 'email'));
+  ASSERT (r->>'created')::boolean AND r->>'parent_rfq_id' IS NULL, 'unlinked after-sales case created';
+  ASSERT (SELECT related_rfq_id IS NULL AND requires_human
+            AND human_review_reason LIKE 'Booking not found in system%'
+            AND missing_fields @> ARRAY['parent_booking_context']::text[]
+            AND departure_date IS NULL AND return_date IS NULL
+          FROM rfqs WHERE id = (r->>'rfq_id')::uuid), 'missing parent and date are explicit';
+
+  RAISE NOTICE '15. after-sales: change request finds the ticketed booking by PNR';
   INSERT INTO rfqs (rfq_number, agency_id, contact_id, intent, status, departure_date, booking_reference, source_channel)
   VALUES ('OFF-RFQ-1999-000001', (SELECT agency_id FROM contacts WHERE id = v_john), v_john, 'NEW_QUOTE', 'TICKETED', current_date + 1, 'T3ST01', 'email');
   r := of_register_inbound_message('{"channel":"email","external_message_id":"t-3","conversation_key":"t-thread-2","sender":{"email":"qa.agent@qa-agency.example"},"message":{"text":"I need to change tomorrow''s flight, PNR T3ST01."}}');
@@ -145,14 +179,14 @@ BEGIN
                                                      'message_id', r->>'message_id', 'booking_reference', 'ZZZ999', 'summary', 'cancel ZZZ999', 'channel', 'email'));
   ASSERT (r->>'created')::boolean AND r->>'status' = 'REFUND_REQUESTED', 'unknown booking -> new after-sales case for a human';
 
-  RAISE NOTICE '14. SLA breach alerts are deduplicated';
+  RAISE NOTICE '16. SLA breach alerts are deduplicated';
   r := of_record_sla_breaches(jsonb_build_object('breaches', jsonb_build_array(jsonb_build_object('rfq_id', v_rfq, 'status', 'BOOKING_REQUESTED', 'minutes_in_status', 9, 'threshold_minutes', 5, 'dedupe_key', 'SLA:test'))));
   ASSERT jsonb_array_length(r->'new_alerts') = 1, 'first alert';
   r := of_record_sla_breaches(jsonb_build_object('breaches', jsonb_build_array(jsonb_build_object('rfq_id', v_rfq, 'status', 'BOOKING_REQUESTED', 'minutes_in_status', 12, 'threshold_minutes', 5, 'dedupe_key', 'SLA:test'))));
   ASSERT jsonb_array_length(r->'new_alerts') = 0, 'no duplicate alert';
   ASSERT (SELECT sla_breached FROM rfqs WHERE id = v_rfq), 'flag stored';
 
-  RAISE NOTICE '15. workflow error -> retry with backoff -> dead letter after 3 attempts';
+  RAISE NOTICE '17. workflow error -> retry with backoff -> dead letter after 3 attempts';
   r := of_register_inbound_message('{"channel":"whatsapp","external_message_id":"wamid.t4","conversation_key":"447700900199","sender":{"phone":"447700900199"},"message":{"text":"hello"}}');
   v_conv := (r->>'conversation_id')::uuid;
   FOR i IN 1..3 LOOP

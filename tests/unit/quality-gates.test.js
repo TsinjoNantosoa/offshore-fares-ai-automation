@@ -75,6 +75,39 @@ test('generated workflows are in sync with lib/ and prompts/ (run `npm run build
   assert.ok(code.includes(datesSrc.slice(0, 2000)), 'lib/dates.js bundled verbatim');
   const prompt = /<!-- BEGIN SYSTEM PROMPT -->\n([\s\S]*?)\n<!-- END SYSTEM PROMPT -->/.exec(fs.readFileSync(path.join(ROOT, 'prompts', 'travel-extractor.md'), 'utf8'))[1].trim();
   assert.ok(code.includes(JSON.stringify(prompt)), 'extractor system prompt injected verbatim');
+
+  const wf15 = workflows.find((w) => w.json.name === 'WF15_AFTER_SALES_ROUTER').json;
+  const wf15Code = wf15.nodes.filter((n) => n.type === 'n8n-nodes-base.code').map((n) => n.parameters.jsCode).join('\n');
+  const afterSalesSrc = fs.readFileSync(path.join(ROOT, 'lib', 'afterSales.js'), 'utf8').replace(/^'use strict';\n/, '');
+  assert.ok(wf15Code.includes(afterSalesSrc.slice(0, 1800)), 'lib/afterSales.js bundled verbatim in WF15');
+  assert.ok(wf15.nodes.some((n) => n.name === 'Load Parent Context' && /of_find_after_sales_parent/.test(n.parameters.query)), 'WF15 loads parent context before resolving dates');
+});
+
+test('WF15 keeps its sub-workflow trigger, exact chain, credentials and desk routing', () => {
+  const wf15 = workflows.find((w) => w.json.name === 'WF15_AFTER_SALES_ROUTER').json;
+  const triggers = wf15.nodes.filter((n) => n.type === 'n8n-nodes-base.executeWorkflowTrigger');
+  assert.equal(triggers.length, 1, 'exactly one executeWorkflowTrigger');
+  assert.equal(triggers[0].name, 'When Called By Another Workflow');
+  assert.equal(triggers[0].id, '19cd0bae-db9c-4a98-a1a6-30988133c0eb');
+  assert.equal(triggers[0].parameters.inputSource, 'passthrough');
+
+  const chain = ['When Called By Another Workflow', 'Parent Lookup', 'Load Parent Context', 'After-Sales Details', 'Open After-Sales Case',
+    'Priority Input', 'Calculate Priority (WF07)', 'Routing Input', 'Route To Desk (WF09)', 'Acknowledgement', 'Send Acknowledgement (WF12)', 'Output'];
+  for (let i = 0; i < chain.length - 1; i += 1) {
+    const outputs = wf15.connections[chain[i]] && wf15.connections[chain[i]].main;
+    assert.deepEqual(outputs, [[{ node: chain[i + 1], type: 'main', index: 0 }]], `${chain[i]} -> ${chain[i + 1]}`);
+  }
+  assert.ok(chain.every((name) => wf15.nodes.some((n) => n.name === name)), 'all historical names are present without suffixes');
+  assert.ok(!wf15.nodes.some((n) => /(?:After-Sales Details|Open After-Sales Case|Priority Input|Routing Input|Acknowledgement|Output)1$/.test(n.name)), 'no duplicated names with suffix 1');
+
+  const parentDb = wf15.nodes.find((n) => n.name === 'Load Parent Context');
+  assert.equal(parentDb.credentials.postgres.name, 'Offshore Fares DB');
+  const calls = Object.fromEntries(wf15.nodes.filter((n) => n.type === 'n8n-nodes-base.executeWorkflow').map((n) => [n.name, n.parameters.workflowId.value]));
+  assert.equal(calls['Calculate Priority (WF07)'], 'ofwf070000000007');
+  assert.equal(calls['Route To Desk (WF09)'], 'ofwf090000000009');
+  assert.equal(calls['Send Acknowledgement (WF12)'], 'ofwf120000000012');
+  const routingCode = wf15.nodes.find((n) => n.name === 'Routing Input').parameters.jsCode;
+  assert.match(routingCode, /r\.status === 'CHANGE_REQUESTED' \? 'TICKETING_DESK' : 'REFUND_DESK'/);
 });
 
 test('OpenAI calls use the credential, strict JSON schema and fall back on error', () => {

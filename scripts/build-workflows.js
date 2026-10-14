@@ -935,32 +935,47 @@ workflows.push(aiWorkflow('WF04', {
 {
   const w = new Workflow('WF15');
   w.add(N.sticky('About WF15', '## WF15 – After-sales router\nChange / cancellation / refund requests become **human tasks** – the system never states penalties or refund amounts.\nFinds the booking (PNR or the agent\'s ticketed booking for the mentioned date) → CHANGE_REQUESTED / REFUND_REQUESTED → priority (travel < 24 h → CRITICAL) → Ticketing / Refund desk → neutral acknowledgement.', { width: 600, height: 220 }), [0, -320]);
-  w.add(N.trigger(), [0, 0]);
-  w.add(N.code('After-Sales Details', body(() => {
+  w.add(Object.assign(N.trigger(), { id: '19cd0bae-db9c-4a98-a1a6-30988133c0eb' }), [0, 0]);
+  w.add(Object.assign(N.code('Parent Lookup', body(() => {
     const ctx = $input.first().json;
     const text = `${ctx.message.subject || ''}\n${ctx.message.text}`;
-    const dates = OF.dates.findDates(text, { today: ctx.today }).filter((d) => d.iso);
+    return [{ json: { ctx, text, db: {
+      parent_rfq_id: ctx.active_rfq ? ctx.active_rfq.id : null,
+      contact_id: ctx.claim.contact ? ctx.claim.contact.id : null,
+      agency_id: ctx.claim.agency ? ctx.claim.agency.id : null,
+      booking_reference: OF.text.findBookingReference(text),
+    } } }];
+  }), L('text')), { id: 'ofwf150000000015-012' }), [260, 0]);
+  w.add(Object.assign(N.pg('Load Parent Context', 'of_find_after_sales_parent'), { id: 'ofwf150000000015-013' }), [520, 0]);
+  w.add(Object.assign(N.code('After-Sales Details', body(() => {
+    const lookup = $('Parent Lookup').first().json;
+    const ctx = lookup.ctx;
+    const parent = $input.first().json.r || {};
+    const change = OF.afterSales.resolveRequest({ text: lookup.text, today: ctx.today, parent, intent: ctx.intent });
     return [{ json: { ctx, db: {
       workflow: $workflow.name, intent: ctx.intent, message_id: ctx.message.id, conversation_id: ctx.claim.conversation.id,
       contact_id: ctx.claim.contact ? ctx.claim.contact.id : null, agency_id: ctx.claim.agency ? ctx.claim.agency.id : null,
-      booking_reference: OF.text.findBookingReference(text), travel_date: dates.length ? dates[0].iso : null,
+      parent_rfq_id: parent.parent_rfq_id || null, booking_reference: parent.booking_reference || OF.text.findBookingReference(lookup.text),
+      travel_date: change.requested_departure_date, requested_departure_date: change.requested_departure_date,
+      requested_return_date: change.requested_return_date, clarification_required: change.clarification_required,
+      ambiguities: change.ambiguities, client_message: ctx.message.text.slice(0, 800),
       summary: ctx.message.text.slice(0, 200), channel: ctx.channel,
     } } }];
-  }), L('dates', 'text')), [260, 0]);
-  w.add(N.pg('Open After-Sales Case', 'of_create_after_sales_case'), [520, 0]);
-  w.add(N.code('Priority Input', body(() => {
+  }), L('afterSales', 'text')), { id: 'ofwf150000000015-003' }), [780, 0]);
+  w.add(Object.assign(N.pg('Open After-Sales Case', 'of_create_after_sales_case'), { id: 'ofwf150000000015-004' }), [1040, 0]);
+  w.add(Object.assign(N.code('Priority Input', body(() => {
     const r = $input.first().json.r;
     const d = $('After-Sales Details').first().json.db;
     return [{ json: { rfq_id: r.rfq_id, intent: d.intent, travel_date: d.travel_date || r.travel_date } }];
-  })), [780, 0]);
-  w.add(N.exec('Calculate Priority (WF07)', 'WF07', { wait: true }), [1040, 0]);
-  w.add(N.code('Routing Input', body(() => {
+  })), { id: 'ofwf150000000015-005' }), [1300, 0]);
+  w.add(Object.assign(N.exec('Calculate Priority (WF07)', 'WF07', { wait: true }), { id: 'ofwf150000000015-006' }), [1560, 0]);
+  w.add(Object.assign(N.code('Routing Input', body(() => {
     const r = $('Open After-Sales Case').first().json.r;
     const p = $input.first().json;
     return [{ json: { rfq_id: r.rfq_id, desk_override: r.status === 'CHANGE_REQUESTED' ? 'TICKETING_DESK' : 'REFUND_DESK', title: `${r.rfq_number}: ${r.status.replace('_', ' ').toLowerCase()} (${p.level})`, note: $('After-Sales Details').first().json.db.summary, reason_key: r.status } }];
-  })), [1300, 0]);
-  w.add(N.exec('Route To Desk (WF09)', 'WF09', { wait: true }), [1560, 0]);
-  w.add(N.code('Acknowledgement', body(() => {
+  })), { id: 'ofwf150000000015-007' }), [1820, 0]);
+  w.add(Object.assign(N.exec('Route To Desk (WF09)', 'WF09', { wait: true }), { id: 'ofwf150000000015-008' }), [2080, 0]);
+  w.add(Object.assign(N.code('Acknowledgement', body(() => {
     const cfg = OF.config.getConfig($env);
     const ctx = $('After-Sales Details').first().json.ctx;
     const r = $('Open After-Sales Case').first().json.r;
@@ -968,11 +983,15 @@ workflows.push(aiWorkflow('WF04', {
     const t = OF.notifications.afterSalesAcknowledgement({ rfqNumber: r.rfq_number, contactName: ctx.claim.contact ? ctx.claim.contact.first_name : null,
       type: ctx.intent === 'CHANGE_REQUEST' ? 'CHANGE' : ctx.intent === 'CANCELLATION' ? 'CANCELLATION' : 'REFUND', bookingReference: r.booking_reference,
       travelDate: r.travel_date, deskName: route.desk_name, originalSubject: ctx.message.subject, signature: cfg.COMPANY_SIGNATURE });
+    if (r.clarification_required) {
+      t.email_body += '\nPlease reply with the exact travel date. No change has been made.';
+      t.whatsapp_body = `Change request ${r.rfq_number} received. Please reply with the exact travel date. No change has been made.`;
+    }
     return [{ json: { rfq_id: r.rfq_id, kind: 'AFTER_SALES_ACK', channel_override: ctx.channel, email: { subject: t.subject, body: t.email_body }, whatsapp: { body: t.whatsapp_body } } }];
-  }), L('notifications', 'config')), [1820, 0]);
-  w.add(N.exec('Send Acknowledgement (WF12)', 'WF12', { wait: true }), [2080, 0]);
-  w.add(N.code('Output', body(() => [{ json: Object.assign({ rfq_id: $('Open After-Sales Case').first().json.r.rfq_id }, $('Open After-Sales Case').first().json.r) }])), [2340, 0]);
-  w.chain('When Called By Another Workflow', 'After-Sales Details', 'Open After-Sales Case', 'Priority Input', 'Calculate Priority (WF07)', 'Routing Input', 'Route To Desk (WF09)', 'Acknowledgement', 'Send Acknowledgement (WF12)', 'Output');
+  }), L('notifications', 'config')), { id: 'ofwf150000000015-009' }), [2340, 0]);
+  w.add(Object.assign(N.exec('Send Acknowledgement (WF12)', 'WF12', { wait: true }), { id: 'ofwf150000000015-010' }), [2600, 0]);
+  w.add(Object.assign(N.code('Output', body(() => [{ json: Object.assign({ rfq_id: $('Open After-Sales Case').first().json.r.rfq_id }, $('Open After-Sales Case').first().json.r) }])), { id: 'ofwf150000000015-011' }), [2860, 0]);
+  w.chain('When Called By Another Workflow', 'Parent Lookup', 'Load Parent Context', 'After-Sales Details', 'Open After-Sales Case', 'Priority Input', 'Calculate Priority (WF07)', 'Routing Input', 'Route To Desk (WF09)', 'Acknowledgement', 'Send Acknowledgement (WF12)', 'Output');
   workflows.push(w);
 }
 
