@@ -80,15 +80,15 @@ test('dashboard source contains no common mojibake sequences', () => {
 
 test('generated workflows are in sync with lib/ and prompts/ (run `npm run build` after editing)', () => {
   const wf04 = workflows.find((w) => w.json.name === 'WF04_TRAVEL_REQUEST_EXTRACTOR').json;
-  const code = wf04.nodes.filter((n) => n.type === 'n8n-nodes-base.code').map((n) => n.parameters.jsCode).join('\n');
-  const datesSrc = fs.readFileSync(path.join(ROOT, 'lib', 'dates.js'), 'utf8').replace(/^'use strict';\n/, '');
+  const code = wf04.nodes.filter((n) => n.type === 'n8n-nodes-base.code').map((n) => n.parameters.jsCode).join('\n').replace(/\r\n/g, '\n');
+  const datesSrc = fs.readFileSync(path.join(ROOT, 'lib', 'dates.js'), 'utf8').replace(/\r\n/g, '\n').replace(/^'use strict';\n/, '');
   assert.ok(code.includes(datesSrc.slice(0, 2000)), 'lib/dates.js bundled verbatim');
   const prompt = /<!-- BEGIN SYSTEM PROMPT -->\n([\s\S]*?)\n<!-- END SYSTEM PROMPT -->/.exec(fs.readFileSync(path.join(ROOT, 'prompts', 'travel-extractor.md'), 'utf8'))[1].trim();
   assert.ok(code.includes(JSON.stringify(prompt)), 'extractor system prompt injected verbatim');
 
   const wf15 = workflows.find((w) => w.json.name === 'WF15_AFTER_SALES_ROUTER').json;
-  const wf15Code = wf15.nodes.filter((n) => n.type === 'n8n-nodes-base.code').map((n) => n.parameters.jsCode).join('\n');
-  const afterSalesSrc = fs.readFileSync(path.join(ROOT, 'lib', 'afterSales.js'), 'utf8').replace(/^'use strict';\n/, '');
+  const wf15Code = wf15.nodes.filter((n) => n.type === 'n8n-nodes-base.code').map((n) => n.parameters.jsCode).join('\n').replace(/\r\n/g, '\n');
+  const afterSalesSrc = fs.readFileSync(path.join(ROOT, 'lib', 'afterSales.js'), 'utf8').replace(/\r\n/g, '\n').replace(/^'use strict';\n/, '');
   assert.ok(wf15Code.includes(afterSalesSrc.slice(0, 1800)), 'lib/afterSales.js bundled verbatim in WF15');
   assert.ok(wf15.nodes.some((n) => n.name === 'Load Parent Context' && /of_find_after_sales_parent/.test(n.parameters.query)), 'WF15 loads parent context before resolving dates');
 });

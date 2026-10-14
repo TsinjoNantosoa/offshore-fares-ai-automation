@@ -4,9 +4,12 @@
 const $view = document.getElementById('view');
 const state = {
   config: null, timer: null, nav: 0, simulator: null, quoteTab: 'email', activityTab: 'audit',
-  queueFilter: 'all', queueSearch: '', alertFilter: 'all',
+  queueFilter: 'all', queueSearch: '', alertFilter: 'all', activityActor: 'all',
+  disclosures: Object.create(null),
   operator: localStorage.getItem('of_operator') || 'Aisha Khan',
 };
+const UI = globalThis.OffshoreFaresUiPolicy;
+if (!UI) throw new Error('RFQ UI presentation policy is unavailable');
 
 // ---------------------------------------------------------------------------
 // icons (inline SVG, stroke-based)
@@ -82,6 +85,11 @@ const emptyState = (ico, title, text) => `<div class="empty"><div class="empty-i
 const pageHead = (eyebrow, title, sub, right) => `
   <div class="page-head"><div><div class="eyebrow">${esc(eyebrow)}</div><h1>${esc(title)}</h1>${sub ? `<p>${sub}</p>` : ''}</div>${right || ''}</div>`;
 const liveChip = (at) => `<span class="live"><span class="pulse"></span>Live · updated ${esc(fmtClock(at || new Date()))}</span>`;
+const disclosureKey = (rfqNumber, id) => `${rfqNumber}:${id}`;
+const disclosureOpen = (rfqNumber, id, defaultOpen = false) => {
+  const key = disclosureKey(rfqNumber, id);
+  return Object.prototype.hasOwnProperty.call(state.disclosures, key) ? state.disclosures[key] : defaultOpen;
+};
 
 async function api(path, opts) {
   const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
@@ -148,29 +156,33 @@ const PRIORITY_TONE = { CRITICAL: 'crit', HIGH: 'serious', NORMAL: 'info', LOW: 
 
 async function renderDashboard() {
   const nav = state.nav;
-  const s = await api('/api/summary');
+  const [s, queue] = await Promise.all([api('/api/summary'), api('/api/queue')]);
   const cur = s.current_by_status || {};
   const conv = s.conversion || {};
   const sources = Object.fromEntries((s.extraction_sources || []).map((r) => [r.k, r.n]));
   const open = Object.entries(cur).filter(([k]) => !TERMINAL.includes(k)).reduce((a, [, n]) => a + n, 0);
-  const totals = s.totals || { week: 0, total: 0 };
+  const totals = s.totals || {};
   const fr = duration(s.timing.avg_first_response_min);
   const tq = duration(s.timing.avg_quote_min);
   const stageMax = Math.max(1, ...STAGES.map(([, sts]) => sts.reduce((a, k) => a + (cur[k] || 0), 0)));
   const channels = s.by_channel || [];
-  const chTotal = channels.reduce((a, r) => a + r.n, 0) || 1;
+  const channelTotal = channels.reduce((a, r) => a + r.n, 0);
+  const chTotal = channelTotal || 1;
+  const totalRfqs = totals.total ?? channelTotal;
+  const recentVolume = totals.week == null ? `${s.today_total} received today` : `${totals.week} received in the last 7 days · ${s.today_total} today`;
   const chColor = { email: 'var(--brand)', whatsapp: 'var(--ok)' };
   const attention = [
-    ['crit', 'alert', s.sla.open_breached, 'SLA breached', '#/queue'],
-    ['warn', 'shield', cur.PENDING_APPROVAL || 0, 'Quotes waiting for approval', '#/queue'],
-    ['ok', 'ticket', cur.BOOKING_REQUESTED || 0, 'Bookings to hand off', '#/queue'],
+    ['crit', 'alert', s.sla.open_breached, 'SLA breached', '#/queue/sla'],
+    ['warn', 'shield', cur.PENDING_APPROVAL || 0, 'Quotes waiting for approval', '#/queue/approval'],
+    ['ok', 'ticket', cur.BOOKING_REQUESTED || 0, 'Bookings to hand off', '#/queue/booking'],
+    ['warn', 'flag', queue.filter((r) => r.requires_human).length, 'Human review', '#/queue/review'],
     ['info', 'skull', s.automation.dead_letters, 'Dead-letter messages', '#/activity'],
-  ];
+  ].filter(([, , n]) => n > 0);
   paint(nav, `
-    ${pageHead('Operations overview', 'Good to see you, fare desk', 'Every fare request from email and WhatsApp – understood by AI, verified by code, approved by humans.', liveChip(s.generated_at))}
+    ${pageHead('Operations overview', 'Travel Operations Overview', 'Monitor fare requests, approvals, bookings and operational SLAs.', liveChip(s.generated_at))}
     <div class="grid cols-4">
       <div class="card kpi hero"><div class="kpi-top">Open requests <span class="kpi-icon">${icon('layers')}</span></div>
-        <div class="value">${open}</div><div class="sub">${totals.week} received in the last 7 days · ${s.today_total} today</div></div>
+        <div class="value">${open}</div><div class="sub">${recentVolume}</div></div>
       <div class="card kpi hero"><div class="kpi-top">Avg first response <span class="kpi-icon ok">${icon('zap')}</span></div>
         <div class="value">${fr.value}<small>${fr.unit}</small></div><div class="sub">acknowledgement, clarification or quote</div></div>
       <div class="card kpi hero"><div class="kpi-top">Avg time to quote <span class="kpi-icon violet">${icon('clock')}</span></div>
@@ -180,20 +192,22 @@ async function renderDashboard() {
     </div>
 
     <div class="section"><div class="section-head"><h2>Needs attention</h2><span>click to open</span></div>
-      <div class="attention">${attention.map(([tone, ico, n, label, href]) => `
-        <a class="att ${tone} ${n ? '' : 'zero'}" href="${href}"><span class="ico">${icon(ico)}</span><span><div class="n">${n}</div><div class="t">${esc(label)}</div></span></a>`).join('')}
+      <div class="attention">${attention.length ? attention.map(([tone, ico, n, label, href]) => `
+        <a class="att ${tone}" href="${href}"><span class="ico">${icon(ico)}</span><span><div class="n">${n}</div><div class="t">${esc(label)}</div></span></a>`).join('') : `
+        <div class="attention-empty">${icon('check')}<span><strong>Operations are clear</strong><small>No urgent action is waiting.</small></span></div>`}
       </div></div>
 
     <div class="section"><div class="section-head"><h2>Request pipeline</h2><span>open requests by stage</span></div>
       <div class="pipeline">${STAGES.map(([name, sts]) => {
         const n = sts.reduce((a, k) => a + (cur[k] || 0), 0);
-        return `<div class="stage"><div class="stage-name"><i></i>${esc(name)}</div><div class="stage-n">${n}</div>
+        const stageId = name.toLowerCase().replace(/\s+/g, '-');
+        return `<a class="stage" href="#/queue/stage-${stageId}" aria-label="Open ${esc(name)} requests"><div class="stage-name"><i></i>${esc(name)}</div><div class="stage-n">${n}</div>
           <div class="chips">${sts.map((k) => `<span class="chip">${esc(human(k))} <b>${cur[k] || 0}</b></span>`).join('')}</div>
-          <div class="stage-bar"><span style="width:${(n / stageMax) * 100}%"></span></div></div>`;
+          <div class="stage-bar"><span style="width:${(n / stageMax) * 100}%"></span></div></a>`;
       }).join('')}</div></div>
 
     <div class="section grid cols-3">
-      <div class="card"><header><h2>Requests by channel</h2><span class="sub">${totals.total} RFQs</span></header>
+      <div class="card"><header><h2>Requests by channel</h2><span class="sub">${totalRfqs} RFQs</span></header>
         <div class="split-bar">${channels.map((r) => `<span title="${esc(r.k)}: ${r.n}" style="width:${(r.n / chTotal) * 100}%;background:${chColor[r.k] || 'var(--muted)'}"></span>`).join('')}</div>
         <div class="split-legend">${channels.map((r) => `<div><span><span class="legend-dot" style="background:${chColor[r.k] || 'var(--muted)'}"></span>${r.k === 'whatsapp' ? 'WhatsApp' : r.k === 'email' ? 'Email' : esc(r.k)}</span><b>${r.n} · ${Math.round((r.n / chTotal) * 100)}%</b></div>`).join('')}</div>
         <div class="split-legend" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
@@ -226,21 +240,30 @@ const QUEUE_FILTERS = [
   ['sla', 'SLA at risk', (r) => ['BREACHED', 'AT_RISK'].includes(r.sla)],
   ['approval', 'Pending approval', (r) => r.status === 'PENDING_APPROVAL'],
   ['client', 'With client', (r) => ['QUOTED', 'AWAITING_CLIENT', 'CLIENT_INTERESTED'].includes(r.status)],
+  ['booking', 'Booking', (r) => ['BOOKING_REQUESTED', 'TICKETING', 'TICKETED'].includes(r.status)],
+  ['after-sales', 'After-sales', (r) => ['CHANGE_REQUESTED', 'REFUND_REQUESTED'].includes(r.status)],
   ['review', 'Needs review', (r) => r.requires_human],
+  ['stage-intake', 'Intake', (r) => ['NEW', 'NEEDS_INFORMATION'].includes(r.status), false],
+  ['stage-fare-desk', 'Fare desk', (r) => ['READY_FOR_SEARCH', 'ASSIGNED', 'SEARCHING'].includes(r.status), false],
+  ['stage-quote', 'Quote', (r) => ['FARES_FOUND', 'PENDING_APPROVAL', 'APPROVED'].includes(r.status), false],
+  ['stage-with-client', 'With client', (r) => ['QUOTED', 'AWAITING_CLIENT', 'CLIENT_INTERESTED'].includes(r.status), false],
+  ['stage-booking', 'Booking', (r) => ['BOOKING_REQUESTED', 'TICKETING', 'TICKETED'].includes(r.status), false],
 ];
 
 async function renderQueue() {
   const nav = state.nav;
   const rows = await api('/api/queue');
   const counts = Object.fromEntries(QUEUE_FILTERS.map(([id, , fn]) => [id, rows.filter(fn).length]));
+  const activeFilter = QUEUE_FILTERS.find(([id]) => id === state.queueFilter) || QUEUE_FILTERS[0];
+  const stageContext = activeFilter[3] === false ? `<button class="filter active" data-filter="all" aria-label="Clear ${esc(activeFilter[1])} stage filter">${esc(activeFilter[1])} · clear</button>` : '';
   const html = `
     ${pageHead('Fare desk', 'Live RFQ queue', `${rows.length} open requests · sorted by priority, then waiting time`, liveChip())}
     <div class="toolbar">
       <div class="search">${icon('search')}<input id="qSearch" placeholder="Search RFQ, agency, agent, route…" value="${esc(state.queueSearch)}"></div>
-      <div class="filters">${QUEUE_FILTERS.map(([id, label]) => `<button class="filter ${state.queueFilter === id ? 'active' : ''}" data-filter="${id}">${label}<span class="cnt">${counts[id]}</span></button>`).join('')}</div>
+      <div class="filters">${stageContext}${QUEUE_FILTERS.filter(([, , , visible = true]) => visible).map(([id, label]) => `<button class="filter ${state.queueFilter === id ? 'active' : ''}" data-filter="${id}">${label}<span class="cnt">${counts[id]}</span></button>`).join('')}</div>
     </div>
-    <div class="card table-card"><div class="table-wrap"><table>
-      <thead><tr><th>RFQ</th><th>Agency · agent</th><th>Route</th><th>Trip</th><th>Priority</th><th>Status</th><th>Assigned to</th><th>Waiting</th><th>SLA</th></tr></thead>
+    <div class="card table-card"><div class="table-wrap"><table class="queue-table">
+      <thead><tr><th>RFQ</th><th>Client</th><th>Route</th><th>Travel</th><th>Priority</th><th>Current status</th><th>Assigned to</th><th>SLA</th></tr></thead>
       <tbody id="qBody"></tbody></table></div></div>`;
   if (!paint(nav, html)) return;
   const body = document.getElementById('qBody');
@@ -249,17 +272,22 @@ async function renderQueue() {
     const term = state.queueSearch.trim().toLowerCase();
     const list = rows.filter(filter).filter((r) => !term || [r.rfq_number, r.agency, r.agent, r.origin_iata, r.destination_iata, r.status].join(' ').toLowerCase().includes(term));
     body.innerHTML = list.map((r) => `
-      <tr class="clickable" data-rfq="${esc(r.rfq_number)}">
+      <tr class="clickable queue-row ${r.sla === 'BREACHED' ? 'sla-breached' : ''}" data-rfq="${esc(r.rfq_number)}" tabindex="0" role="link" aria-label="Open RFQ ${esc(r.rfq_number)}">
         <td><div class="id-cell">${channelIcon(r.source_channel)}<span class="rfq-id">${esc(r.rfq_number)}</span>${r.requires_human ? `<span class="flag" title="Needs human review">${icon('flag')}</span>` : ''}</div></td>
-        <td><div class="person"><span class="avatar">${esc(initials(r.agent || r.agency))}</span><span class="who"><div>${esc(r.agency || 'Unknown agency')}</div><div class="muted">${esc(r.agent || '—')}</div></span></div></td>
+        <td><div class="person"><span class="avatar">${esc(initials(r.agent || r.agency))}</span><span class="who"><div>${esc(r.agent || 'Unknown contact')}</div><div class="muted">${esc(r.agency || 'Unknown agency')}</div></span></div></td>
         <td>${r.origin_iata ? `<span class="route">${esc(r.origin_iata)} ${icon('arrow')} ${esc(r.destination_iata || '?')}</span>` : '<span class="muted">—</span>'}</td>
-        <td class="nowrap">${fmtDay(r.departure_date)}<div class="muted small">${esc(cabinLabel(r.cabin))} · ${r.pax || '—'} pax</div></td>
+        <td class="nowrap">${fmtDay(r.departure_date)}${r.return_date ? ` → ${fmtDay(r.return_date)}` : ''}<div class="muted small">${esc(cabinLabel(r.cabin))} · ${r.pax || '—'} pax</div></td>
         <td>${prioBadge(r.priority_level)}</td><td>${statusTag(r.status, r.status_label)}</td>
         <td class="nowrap">${esc(r.desk || '—')}${r.operator ? `<div class="muted small">${esc(r.operator)}</div>` : ''}</td>
-        <td class="mono nowrap">${waiting(r.waiting_seconds)}</td>
-        <td class="nowrap">${r.sla === 'N/A' ? '<span class="muted small">with client</span>' : badge(r.sla === 'OK' ? 'On time' : r.sla === 'AT_RISK' ? 'At risk' : 'Breached', r.sla)}</td>
-      </tr>`).join('') || `<tr><td colspan="9">${emptyState('list', 'No request matches', 'Try another filter or search term.')}</td></tr>`;
-    body.querySelectorAll('tr[data-rfq]').forEach((tr) => tr.addEventListener('click', () => { location.hash = `#/rfq/${tr.dataset.rfq}`; }));
+        <td class="nowrap">${r.sla === 'N/A' ? '<span class="muted small">With client</span>' : badge(r.sla === 'OK' ? 'On time' : r.sla === 'AT_RISK' ? 'At risk' : 'Breached', r.sla)}<div class="muted small">${waiting(r.waiting_seconds)}${r.open_alerts ? ` · ${r.open_alerts} alert${r.open_alerts === 1 ? '' : 's'}` : ''}</div></td>
+      </tr>`).join('') || `<tr><td colspan="8">${emptyState('list', 'No request matches', 'Try another filter or search term.')}</td></tr>`;
+    body.querySelectorAll('tr[data-rfq]').forEach((tr) => {
+      const open = () => { location.hash = `#/rfq/${tr.dataset.rfq}`; };
+      tr.addEventListener('click', open);
+      tr.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+      });
+    });
   };
   draw();
   document.getElementById('qSearch').addEventListener('input', (e) => { state.queueSearch = e.target.value; draw(); });
@@ -276,9 +304,18 @@ async function renderQueue() {
 function requirementsCard(r) {
   const req = r.requirements || {};
   const pax = req.passengers || {};
-  const missing = (r.missing_fields || []).length ? r.missing_fields.map((m) => badge(human(m), 'warn')).join(' ') : badge('Complete', 'ok');
-  return `<div class="card"><header><h2>Travel requirements</h2>${r.extraction_meta ? badge(r.extraction_meta.source === 'openai' ? `AI · ${r.extraction_meta.model || ''}` : 'Rules fallback', 'ai') : ''}</header>
-    <dl class="kv">
+  const parentMissing = ['CHANGE_REQUESTED', 'REFUND_REQUESTED'].includes(r.status)
+    && !(r.parent_rfq_id || req.parent_rfq_number || (req.original && (req.original.parent_rfq_id || req.original.parent_rfq_number)));
+  const missingFields = [...(r.missing_fields || [])];
+  if (parentMissing && !missingFields.includes('parent_booking_context')) missingFields.push('parent_booking_context');
+  const missing = missingFields.length ? missingFields.map((m) => badge(human(m), 'warn')).join(' ') : badge('Complete', 'ok');
+  const passengerText = `${pax.adults ?? '—'} adult${pax.adults === 1 ? '' : 's'}${pax.children ? ` · ${pax.children} child${pax.children === 1 ? '' : 'ren'}` : ''}${pax.infants ? ` · ${pax.infants} infant${pax.infants === 1 ? '' : 's'}` : ''}`;
+  return `<section class="card" id="travel-requirements"><header><div><div class="card-kicker">Request</div><h2>Travel requirements</h2></div>${missing}</header>
+    <div class="trip-summary">
+      <div class="trip-route"><span>${esc(r.origin_iata || '?')}</span>${icon('arrow')}<span>${esc(r.destination_iata || '?')}</span></div>
+      <div class="trip-facts"><strong>${fmtDay(req.departure_date || r.departure_date)} → ${fmtDay(req.return_date || r.return_date)}</strong><span>${esc(passengerText)} · ${esc(cabinLabel(r.cabin))}</span><span>${(req.preferred_airlines || []).map(esc).join(', ') || 'No airline preference'}</span></div>
+    </div>
+    <details class="inline-disclosure"><summary>View details</summary><dl class="kv">
       <dt>Intent</dt><dd>${esc(human(r.intent))}${r.classification ? ` <span class="muted small">· confidence ${esc(r.classification.confidence)}</span>` : ''}</dd>
       <dt>Route</dt><dd><span class="route">${esc(r.origin_iata || '?')} ${icon('arrow')} ${esc(r.destination_iata || '?')}</span> <span class="muted small">${esc(human(r.trip_type || ''))}</span></dd>
       <dt>Departure</dt><dd>${fmtDay(req.departure_date || r.departure_date)}${req.date_flexibility_days ? ` <span class="muted">±${req.date_flexibility_days} d</span>` : ''}</dd>
@@ -290,34 +327,34 @@ function requirementsCard(r) {
       <dt>Missing</dt><dd>${missing}</dd>
       ${(req.ambiguities || []).length ? `<dt>Ambiguities</dt><dd class="small">${req.ambiguities.map(esc).join('<br>')}</dd>` : ''}
       ${r.booking_reference ? `<dt>Booking ref</dt><dd class="mono">${esc(r.booking_reference)}</dd>` : ''}
-    </dl></div>`;
+    </dl></details></section>`;
 }
 
 function afterSalesCard(r) {
   const req = r.requirements || {};
-  const original = req.original || {};
-  if (!r.after_sales_type || !Object.keys(original).length) return '';
+  const original = req.original || req.parent_context || {};
+  if (!r.after_sales_type && !['CHANGE_REQUESTED', 'REFUND_REQUESTED'].includes(r.status)) return '';
   const requested = req.requested_changes || {};
   const option = original.selected_option || {};
   const adults = original.adults ?? (original.requirements && original.requirements.passengers && original.requirements.passengers.adults);
-  return `<div class="card"><header><h2>After-sales context</h2>${req.clarification_required ? badge('Clarification required', 'warn') : badge('Human review', 'ai')}</header>
-    <dl class="kv">
-      <dt>Parent RFQ</dt><dd><a class="mono" href="#/rfq/${encodeURIComponent(req.parent_rfq_number || original.parent_rfq_number || '')}">${esc(req.parent_rfq_number || original.parent_rfq_number || '—')}</a></dd>
-      <dt>Original route</dt><dd><span class="route">${esc(original.origin_iata || '?')} ${icon('arrow')} ${esc(original.destination_iata || '?')}</span></dd>
-      <dt>Passengers</dt><dd>${adults ?? '—'} adult(s)</dd>
-      <dt>Cabin</dt><dd>${esc(cabinLabel(original.cabin))}</dd>
-      <dt>Selected option</dt><dd>${option.code ? `<strong>${esc(option.code)} · ${esc(option.airline || '')}</strong>${option.fare_amount ? ` · ${esc(option.fare_currency)} ${Number(option.fare_amount).toLocaleString('en-US')}` : ''}` : '—'}</dd>
-      <dt>Original travel</dt><dd>${fmtDay(original.departure_date)} ${icon('arrow')} ${fmtDay(original.return_date)}</dd>
-      <dt>Requested change</dt><dd>${requested.departure_date ? `Departure ${icon('arrow')} ${fmtDay(requested.departure_date)}` : ''}${requested.return_date ? `${requested.departure_date ? '<br>' : ''}Return ${icon('arrow')} ${fmtDay(requested.return_date)}` : ''}${!requested.departure_date && !requested.return_date ? 'Exact date required' : ''}</dd>
-      <dt>Client message</dt><dd>${esc(req.client_message || req.summary || '—')}</dd>
-      <dt>Desk</dt><dd>${esc(r.desk_name || r.assigned_team || '—')}</dd>
-    </dl></div>`;
+  const isRefund = r.status === 'REFUND_REQUESTED' || r.after_sales_type === 'REFUND';
+  const parentNumber = req.parent_rfq_number || original.parent_rfq_number || '';
+  const parentMissing = !(r.parent_rfq_id || parentNumber);
+  return `<section class="card focus-card after-sales-card" id="after-sales"><header><div><div class="card-kicker">Action required</div><h2>${isRefund ? 'Refund context' : 'After-sales context'}</h2></div>${parentMissing ? badge('Parent context missing', 'warn') : req.clarification_required ? badge('Clarification required', 'warn') : badge('Human review', 'ai')}</header>
+    <div class="context-compare">
+      <div class="context-panel"><span class="context-label">Original</span><strong class="route">${esc(original.origin_iata || '?')} ${icon('arrow')} ${esc(original.destination_iata || '?')}</strong><span>${fmtDay(original.departure_date)} → ${fmtDay(original.return_date)}</span><span>${option.code ? `${esc(option.code)} · ${esc(option.airline || 'Airline unavailable')}` : 'Selected option unavailable'}</span><span>${r.booking_reference || original.booking_reference ? `PNR ${esc(r.booking_reference || original.booking_reference)}` : 'PNR unavailable'}</span></div>
+      <div class="context-panel requested"><span class="context-label">Requested</span><strong>${isRefund ? 'Refund / cancellation review' : 'Travel date change'}</strong><span>Departure → ${requested.departure_date ? fmtDay(requested.departure_date) : 'unchanged'}</span><span>Return → ${requested.return_date ? fmtDay(requested.return_date) : 'unchanged'}</span><span>${parentMissing ? 'Parent booking context is required before processing' : req.clarification_required ? 'Clarification is required before processing' : 'Ready for operator review'}</span></div>
+    </div>
+    <div class="client-message"><span>Client message</span><p>${esc(req.client_message || req.summary || '—')}</p></div>
+    <div class="context-footer"><span>Desk <strong>${esc(r.desk_name || r.assigned_team || '—')}</strong></span>${parentNumber ? `<a href="#/rfq/${encodeURIComponent(parentNumber)}">Parent ${esc(parentNumber)}</a>` : '<span class="warn-text">Parent booking context unavailable</span>'}<button class="btn" data-op="RESOLVE_AFTER_SALES">Mark handled</button></div>
+  </section>`;
 }
 
 function fareDeskCard(d) {
   const r = d.rfq;
   const active = d.options.filter((o) => o.is_active);
   const canEnter = ['ASSIGNED', 'SEARCHING', 'FARES_FOUND', 'PENDING_APPROVAL'].includes(r.status);
+  const expanded = disclosureOpen(r.rfq_number, 'fare-desk', UI.fareDeskExpanded(r.status));
   const list = active.map((o) => {
     const expired = new Date(o.fare_valid_until) < new Date();
     return `
@@ -329,16 +366,18 @@ function fareDeskCard(d) {
       <div class="small ${expired ? 'muted' : ''}">Valid until ${fmtTime(o.fare_valid_until)} ${expired ? badge('Expired', 'crit') : ''} · ${esc(o.source)}</div>
     </div>`;
   }).join('');
-  return `<div class="card"><header><h2>Mock Fare Desk</h2>${canEnter ? '<button class="btn sm" id="loadMock">Load sample fares</button>' : ''}</header>
-    ${list ? `<div class="grid" style="gap:10px">${list}</div>` : '<div class="muted small">No fare options yet.</div>'}
+  return `<details class="card disclosure-card" id="fare-desk" data-disclosure="fare-desk" data-rfq="${esc(r.rfq_number)}" data-closed-label="View" ${expanded ? 'open' : ''}><summary><span><span class="card-kicker">Sourcing</span><strong>Fare desk</strong></span><span class="summary-meta">${active.length} option${active.length === 1 ? '' : 's'} <span class="toggle-label">${expanded ? 'Hide' : 'View'}</span></span></summary>
+    <div class="disclosure-body">
+    <div class="section-tools">${state.config && state.config.demo_mode && canEnter ? `${badge('Demo tool', 'warn')}<button class="btn sm" id="loadMock">Load sample fares</button>` : ''}</div>
+    ${list ? `<div class="grid compact-grid">${list}</div>` : '<div class="muted small">No fare options yet.</div>'}
     ${canEnter ? `
-      <form id="fareForm" style="margin-top:14px" class="grid">
+      <form id="fareForm" class="grid fare-form">
         <div class="notice small">Fares only enter the system here (or from a future GDS adapter). The AI never creates or edits a price.</div>
         <label>Fare options (JSON array, validated server-side)<textarea id="fareJson" style="min-height:180px" placeholder='[{"airline":"Qatar Airways", ...}]'></textarea></label>
         <div class="form-grid"><label>Entered by<input id="fareBy" value="${esc(state.operator)}"></label></div>
         <div class="actions"><button class="btn primary" type="submit">Submit fares &amp; generate quote</button></div>
       </form>` : ''}
-  </div>`;
+    </div></details>`;
 }
 
 function approvalCard(d) {
@@ -350,8 +389,11 @@ function approvalCard(d) {
   if (q.generated_by === 'TEMPLATE' && v.ai_error) notes.push(`AI formatting unavailable (${v.ai_error}) – deterministic template used.`);
   if (v.fallback_to_template) notes.push(`AI text rejected by the number check: ${(v.errors || []).slice(0, 3).join('; ')} – template used.`);
   if ((v.warnings || []).length) notes.push(`Edited text differs from fare data: ${v.warnings.slice(0, 3).join('; ')}`);
-  return `<div class="card"><header><h2>Quote v${q.version} ${badge(human(q.status), q.status === 'SENT' || q.status === 'APPROVED' ? 'ok' : q.status === 'REJECTED' ? 'crit' : 'warn')}</h2>
-      <span>${badge(q.generated_by === 'AI' ? `AI · ${q.ai_model || ''}` : human(q.generated_by), q.generated_by === 'AI' ? 'ai' : 'plain')}</span></header>
+  const optionCount = d.options.filter((o) => o.is_active).length;
+  const expanded = disclosureOpen(d.rfq.rfq_number, 'quote', UI.quoteExpanded(d.rfq.status, q.status));
+  return `<details class="card disclosure-card quote-card" id="quote" data-disclosure="quote" data-rfq="${esc(d.rfq.rfq_number)}" data-closed-label="View quote" ${expanded ? 'open' : ''}><summary><span><span class="card-kicker">Commercial</span><strong>Quote v${q.version}</strong></span><span class="summary-meta">${badge(human(q.status), q.status === 'SENT' || q.status === 'APPROVED' ? 'ok' : q.status === 'REJECTED' ? 'crit' : 'warn')}<span>${optionCount} fare option${optionCount === 1 ? '' : 's'}</span>${q.approved_by ? `<span>Approved by ${esc(q.approved_by)}</span>` : ''}${q.sent_at ? `<span>${fmtTime(q.sent_at)}</span>` : ''}<span class="toggle-label">${expanded ? 'Hide' : 'View quote'}</span></span></summary>
+    <div class="disclosure-body">
+    <div class="section-tools">${badge(q.generated_by === 'AI' ? `AI · ${q.ai_model || ''}` : human(q.generated_by), q.generated_by === 'AI' ? 'ai' : 'plain')}</div>
     ${notes.map((n) => `<div class="notice warn small" style="margin-bottom:8px">${esc(n)}</div>`).join('')}
     <div class="tabs-inline"><button data-qt="email" class="${state.quoteTab === 'email' ? 'active' : ''}">Email</button><button data-qt="whatsapp" class="${state.quoteTab === 'whatsapp' ? 'active' : ''}">WhatsApp</button></div>
     ${pending ? `
@@ -367,32 +409,36 @@ function approvalCard(d) {
       <div class="muted small" style="margin-top:8px">Valid until ${fmtTime(q.valid_until)} · content hash <span class="mono">${esc(String(q.content_hash).slice(0, 12))}…</span></div>`
     : `<div class="small muted">Subject: ${esc(q.email_subject)}</div><pre class="quote">${esc(state.quoteTab === 'email' ? q.email_body : q.whatsapp_body)}</pre>
        <div class="muted small" style="margin-top:8px">${q.approved_by ? `Approved by ${esc(q.approved_by)} · ${fmtTime(q.approved_at)}` : ''}${q.sent_at ? ` · sent ${fmtTime(q.sent_at)} via ${esc(q.delivery_channel)}` : ''}</div>`}
-  </div>`;
+    </div></details>`;
 }
 
-function handoffCard(h) {
-  const o = typeof h.selected_option === 'string' ? { code: h.selected_option } : (h.selected_option || {});
-  const p = h.passengers || {};
+function handoffCard(h, r) {
+  const req = r.requirements || {};
+  const o = typeof h.selected_option === 'string' ? { code: h.selected_option } : (h.selected_option || (r.selected_option_code ? { code: r.selected_option_code } : {}));
+  const p = h.passengers || req.passengers || {};
+  const travelDates = h.travel_dates || { departure: req.departure_date || r.departure_date, return: req.return_date || r.return_date };
+  const contactName = [r.first_name, r.last_name].filter(Boolean).join(' ');
   const segs = (o.segments || []).map((x) => `<div class="seg">${esc(x.direction === 'INBOUND' ? '↩' : '→')} ${esc(x.flight_no)} ${esc(x.from)}→${esc(x.to)} · ${esc(String(x.depart_at || '').replace('T', ' '))}</div>`).join('');
-  return `<div class="card handoff"><header><h2>Booking handoff → Ticketing Desk</h2>${badge('Booking request', 'ok')}</header>
+  return `<section class="card handoff focus-card" id="booking-handoff"><header><div><div class="card-kicker">Ticketing</div><h2>${r.status === 'TICKETED' ? 'Booking summary' : 'Booking handoff'}</h2></div>${statusTag(r.status, r.status_label)}</header>
     ${h.requires_fare_recheck ? '<div class="notice crit small" style="margin-bottom:8px">Fare validity passed – revalidate before ticketing.</div>' : ''}
     <dl class="kv">${[
-      ['RFQ', h.rfq_number ? `<span class="mono">${esc(h.rfq_number)}</span>` : ''],
-      ['Agency / agent', h.agency || h.contact ? `${esc(h.agency || '—')} · ${esc(h.contact || '—')}` : ''],
-      ['Contact', h.contact_email || h.contact_whatsapp ? `<span class="small">${esc(h.contact_email || '')} ${h.contact_whatsapp ? `· +${esc(h.contact_whatsapp)}` : ''}</span>` : ''],
-      ['Passengers', p.adults ? `${esc(p.adults)} ADT${p.children ? ` · ${esc(p.children)} CHD` : ''}${p.infants ? ` · ${esc(p.infants)} INF` : ''}` : ''],
+      ['RFQ', `<span class="mono">${esc(h.rfq_number || r.rfq_number)}</span>`],
+      ['Agency / agent', h.agency || h.contact || r.agency_name || contactName ? `${esc(h.agency || r.agency_name || 'Unknown agency')} · ${esc(h.contact || contactName || 'Unknown contact')}` : ''],
+      ['Contact', h.contact_email || h.contact_whatsapp || r.contact_email || r.contact_whatsapp ? `<span class="small">${esc(h.contact_email || r.contact_email || '')} ${(h.contact_whatsapp || r.contact_whatsapp) ? `· +${esc(h.contact_whatsapp || r.contact_whatsapp)}` : ''}</span>` : ''],
+      ['Passengers', p.adults != null ? `${esc(p.adults)} ADT${p.children ? ` · ${esc(p.children)} CHD` : ''}${p.infants ? ` · ${esc(p.infants)} INF` : ''}` : ''],
       ['Selected option', o.code ? `<strong>${esc(o.code)}${o.airline ? ` · ${esc(o.airline)}` : ''}</strong> ${o.fare_amount ? `· ${esc(o.fare_currency)} ${Number(o.fare_amount).toLocaleString('en-US')} ${o.fare_basis === 'TOTAL' ? 'total' : 'per pax'}` : ''}` : ''],
       ['Flights', segs],
-      ['Travel dates', h.travel_dates ? `${fmtDay(h.travel_dates.departure)} → ${fmtDay(h.travel_dates.return)}` : ''],
+      ['Travel dates', travelDates.departure ? `${fmtDay(travelDates.departure)} → ${fmtDay(travelDates.return)}` : ''],
       ['Conditions', o.baggage ? `<span class="small">Bag ${esc(o.baggage)} · Change ${esc(o.change_penalty)} · Refund ${esc(o.refund_penalty)}</span>` : ''],
+      ['PNR', r.booking_reference ? `<strong class="mono">${esc(r.booking_reference)}</strong>` : (r.status === 'TICKETED' ? '<span class="warn-text">Not recorded</span>' : '<span class="muted">Pending ticketing</span>')],
       ['Agent note', h.notes ? `<span class="small">${esc(h.notes)}</span>` : ''],
     ].filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}
     </dl>
-    <details><summary>Raw handoff payload (for a future PNR / ticketing API)</summary><pre class="quote">${esc(JSON.stringify(h, null, 2))}</pre></details></div>`;
+    <details class="inline-disclosure"><summary>Raw handoff payload</summary><pre class="quote">${esc(JSON.stringify(h, null, 2))}</pre></details></section>`;
 }
 
 function operatorActions(r) {
-  const actions = {
+  const operational = {
     ASSIGNED: [['START_SEARCH', 'Start fare search']],
     BOOKING_REQUESTED: [['START_TICKETING', 'Start ticketing']],
     TICKETING: [['MARK_TICKETED', 'Mark ticketed (PNR)']],
@@ -403,17 +449,70 @@ function operatorActions(r) {
   }[r.status] || [];
   const common = ['CLOSED', 'CANCELLED', 'LOST', 'TICKETED'].includes(r.status) ? [] : [['MARK_LOST', 'Mark lost'], ['CANCEL', 'Cancel']];
   const flag = r.requires_human ? [['CLEAR_HUMAN_FLAG', 'Clear review flag']] : [];
-  return actions.concat(flag, common).map(([a, l], i) => `<button class="btn ${i === 0 && !['MARK_LOST', 'CANCEL'].includes(a) ? 'primary' : ''} ${['MARK_LOST', 'CANCEL'].includes(a) ? 'danger' : ''}" data-op="${a}">${l}</button>`).join('');
+  const primary = UI.presentationFor(r.status).primary;
+  const primaryHtml = primary.kind === 'operation'
+    ? `<button class="btn primary primary-action" data-op="${esc(primary.action)}">${esc(primary.label)}</button>`
+    : `<button class="btn primary primary-action" data-jump="${esc(primary.target)}">${esc(primary.label)}</button>`;
+  const secondary = operational.concat(flag, common).filter(([action]) => action !== primary.action && !(action === 'RESOLVE_AFTER_SALES' && ['CHANGE_REQUESTED', 'REFUND_REQUESTED'].includes(r.status)));
+  const more = secondary.length ? `<details class="action-menu"><summary class="btn">More actions ···</summary><div class="action-popover">${secondary.map(([action, label]) => `<button class="btn ${['MARK_LOST', 'CANCEL'].includes(action) ? 'danger' : ''}" data-op="${action}">${label}</button>`).join('')}</div></details>` : '';
+  return `${primaryHtml}${more}`;
 }
 
 function replyCard(r) {
   if (!state.config || !state.config.demo_mode) return '';
-  return `<div class="card"><header><h2>Simulate an agent reply</h2><span class="sub">${esc(r.conversation_channel || r.source_channel)} · same thread</span></header>
+  const expanded = disclosureOpen(r.rfq_number, 'demo-tools');
+  return `<details class="card disclosure-card demo-tools" data-disclosure="demo-tools" data-rfq="${esc(r.rfq_number)}" data-closed-label="Open" ${expanded ? 'open' : ''}><summary><span><span class="card-kicker">Non-operational</span><strong>Developer / Demo tools</strong></span><span class="summary-meta">${badge('Demo only', 'warn')}<span class="toggle-label">${expanded ? 'Hide' : 'Open'}</span></span></summary><div class="disclosure-body"><div class="small muted demo-note">Simulate an agent reply · ${esc(r.conversation_channel || r.source_channel)} · same thread</div>
     <form id="replyForm" class="grid">
       <div class="actions">${['Option 2 works. Please proceed.', 'second one', 'go ahead', 'please hold', 'Too expensive. Anything cheaper?', 'can you check Emirates?', 'change dates to 18th', 'STOP'].map((t) => `<button type="button" class="btn sm" data-reply="${esc(t)}">${esc(t)}</button>`).join('')}</div>
       <label>Message<input id="replyText" placeholder="Type a reply from ${esc(r.first_name || 'the agent')}"></label>
       <div class="actions"><button class="btn primary" type="submit">Send as ${esc(r.first_name || 'agent')}</button></div>
-    </form></div>`;
+    </form></div></details>`;
+}
+
+function messageHtml(m) {
+  return `<div class="msg ${m.direction}"><div class="meta">${badge(m.direction === 'INBOUND' ? 'Agent' : human(m.kind || 'outbound'), m.direction === 'INBOUND' ? 'ai' : 'info')} ${badge(m.channel, 'plain')} ${m.delivery_status ? badge(human(m.delivery_status), m.delivery_status) : ''} ${(m.security_flags || []).length ? badge('Injection signals', 'crit') : ''}<span>${fmtTime(m.at)}</span>${m.classification ? `<span>→ ${esc(human(m.classification.intent))} (${esc(m.classification.confidence)})</span>` : ''}</div>
+    ${m.subject ? `<div class="small msg-subject"><strong>${esc(m.subject)}</strong></div>` : ''}<pre>${esc(m.content)}</pre></div>`;
+}
+
+function conversationCard(messages, rfqNumber) {
+  const all = messages || [];
+  const preview = all.slice(-2);
+  const content = (rows) => rows.map(messageHtml).join('') || '<div class="muted">No messages</div>';
+  const expanded = disclosureOpen(rfqNumber, 'conversation-all');
+  return `<section class="card" id="conversation"><header><div><div class="card-kicker">Client contact</div><h2>Conversation</h2></div><span class="sub">${all.length} message${all.length === 1 ? '' : 's'}</span></header>
+    ${all.length > 2 ? `<details class="inline-disclosure conversation-toggle" data-disclosure="conversation-all" data-rfq="${esc(rfqNumber)}" ${expanded ? 'open' : ''}><summary>${expanded ? 'Hide full conversation' : `View all ${all.length} messages`}</summary><div class="conversation-all" data-lazy-conversation></div></details>` : ''}
+    <div class="conversation-preview">${content(preview)}</div>
+  </section>`;
+}
+
+function tasksCard(alerts) {
+  if (!alerts.length) return '';
+  const open = alerts.filter((a) => a.status !== 'RESOLVED');
+  const resolved = alerts.filter((a) => a.status === 'RESOLVED');
+  const row = (a) => `<div class="task-row"><span class="task-icon ${esc(a.severity)}">${icon(a.alert_type === 'SLA_BREACH' ? 'clock' : 'alert')}</span><span><strong>${esc(a.title)}</strong><small>${esc(human(a.alert_type))} · ${ago(a.created_at)}</small></span></div>`;
+  return `<section class="card tasks-card"><header><h2>Tasks &amp; alerts</h2>${badge(`${open.length} open`, open.length ? 'warn' : 'ok')}</header>
+    ${open.map(row).join('') || '<div class="muted small">No open tasks.</div>'}
+    ${resolved.length ? `<details class="inline-disclosure"><summary>View history · ${resolved.length} resolved</summary><div class="task-history">${resolved.map(row).join('')}</div></details>` : ''}
+  </section>`;
+}
+
+function auditRowHtml(a) {
+  return `<li><span class="muted">${new Date(a.created_at).toLocaleTimeString('en-GB')}</span><span><strong>${esc(human(a.action))}</strong></span><span class="small muted">${esc(human(a.actor_type))}${a.actor_id ? ` · ${esc(a.actor_id)}` : ''}${a.metadata && a.metadata.to ? ` · ${esc(human(a.metadata.from))} → ${esc(human(a.metadata.to))}` : ''}${a.metadata && a.metadata.score !== undefined ? ` · score ${esc(a.metadata.score)} ${esc(a.metadata.level)}` : ''}</span></li>`;
+}
+
+function auditCard(audit, rfqNumber) {
+  const expanded = disclosureOpen(rfqNumber, 'activity-audit');
+  return `<details class="card disclosure-card audit-card" id="activity-audit" data-disclosure="activity-audit" data-rfq="${esc(rfqNumber)}" data-closed-label="Expand" ${expanded ? 'open' : ''}><summary><span><span class="card-kicker">History</span><strong>Activity &amp; audit</strong></span><span class="summary-meta">${audit.length} events <span class="toggle-label">${expanded ? 'Hide' : 'Expand'}</span></span></summary><div class="disclosure-body">
+    <ul class="timeline" data-lazy-audit></ul>
+  </div></details>`;
+}
+
+function journeyCard(journey, rfqNumber) {
+  const done = journey.filter((j) => j.done).length;
+  const current = [...journey].reverse().find((j) => j.done);
+  const percent = journey.length ? Math.round((done / journey.length) * 100) : 0;
+  const expanded = disclosureOpen(rfqNumber, 'request-journey');
+  return `<details class="card disclosure-card journey-card" id="request-journey" data-disclosure="request-journey" data-rfq="${esc(rfqNumber)}" data-closed-label="View journey" ${expanded ? 'open' : ''}><summary><span><span class="card-kicker">Progress</span><strong>Request journey</strong></span><span class="journey-summary"><span>${done} / ${journey.length} steps · ${esc(current ? human(current.label) : 'Not started')}</span><span class="progress-track"><span style="width:${percent}%"></span></span><span class="toggle-label">${expanded ? 'Hide' : 'View journey'}</span></span></summary><div class="disclosure-body"><div class="journey">${journey.map((j) => `<span class="step ${j.done ? 'done' : ''}" title="${j.at ? fmtTime(j.at) : 'pending'}"><span class="dot"></span>${esc(j.label)}</span>`).join('')}</div></div></details>`;
 }
 
 async function renderRfq(number) {
@@ -422,43 +521,48 @@ async function renderRfq(number) {
   const r = d.rfq;
   const s = d.sla;
   const who = [r.first_name, r.last_name].filter(Boolean).join(' ') || r.contact_email || '';
-  const done = d.journey.filter((j) => j.done).length;
+  const req = r.requirements || {};
+  const pax = req.passengers || {};
+  const paxTotal = Number(r.adults ?? pax.adults ?? 0) + Number(r.children ?? pax.children ?? 0) + Number(r.infants ?? pax.infants ?? 0);
+  const policy = UI.presentationFor(r.status);
+  const cards = {
+    requirements: requirementsCard(r),
+    afterSales: afterSalesCard(r),
+    booking: r.handoff || ['BOOKING_REQUESTED', 'TICKETING', 'TICKETED'].includes(r.status) ? handoffCard(r.handoff || {}, r) : '',
+    quote: approvalCard(d),
+    fare: fareDeskCard(d),
+    conversation: conversationCard(d.messages, r.rfq_number),
+  };
+  const primaryCards = policy.focus.map((key) => cards[key]).filter(Boolean);
+  const secondaryCards = ['requirements', 'afterSales', 'booking', 'quote', 'fare', 'conversation'].filter((key) => !policy.focus.includes(key)).map((key) => cards[key]).filter(Boolean);
+  const warningTarget = policy.focus[0] === 'afterSales' ? 'after-sales' : 'travel-requirements';
   const ok = paint(nav, `
     <a href="#/queue" class="back">${icon('back')} Back to queue</a>
-    <div class="detail-head">
-      <div>
-        <h1><span class="mono" style="font-size:20px">${esc(r.rfq_number)}</span> ${statusTag(r.status, r.status_label)} ${prioBadge(r.priority_level)}
-          ${r.requires_human ? badge('Needs review', 'warn') : ''} ${(r.security_flags || []).length ? badge('Security flag', 'crit') : ''}</h1>
-        <div class="meta-line">
-          <span>${esc(r.agency_name || 'Unknown agency')} · ${esc(who)} ${r.verification_status === 'UNVERIFIED' ? badge('Unverified sender', 'warn') : ''}</span>
-          <span>via ${esc(r.source_channel)}</span><span>created ${fmtTime(r.created_at)}</span>
-          <span>${esc(r.desk_name || 'Unassigned')}${r.operator_name ? ` · ${esc(r.operator_name)}` : ''}</span>
-          <span>SLA ${s.tracked ? `${badge(s.breached ? 'Breached' : 'On time', s.breached ? 'BREACHED' : 'OK')} ${esc(`${duration(s.minutes_in_status).value} ${duration(s.minutes_in_status).unit}`)} in status · limit ${esc(s.threshold_minutes)} min` : 'with client'}</span>
-        </div>
+    <section class="detail-head compact-head">
+      <div class="head-main">
+        <div class="head-status"><span class="mono rfq-title">${esc(r.rfq_number)}</span>${statusTag(r.status, r.status_label)}${prioBadge(r.priority_level)}${s.tracked ? badge(s.breached ? 'SLA breached' : 'On time', s.breached ? 'BREACHED' : 'OK') : ''}</div>
+        <div class="client-line"><strong>${esc(who || 'Unknown contact')}</strong><span>${esc(r.agency_name || 'Unknown agency')} · ${esc(human(r.source_channel))}</span></div>
+        <div class="trip-line"><span class="route">${esc(r.origin_iata || '?')} ${icon('arrow')} ${esc(r.destination_iata || '?')}</span><span>${fmtDay(req.departure_date || r.departure_date)} → ${fmtDay(req.return_date || r.return_date)}</span><span>${paxTotal || '—'} pax</span><span>${esc(cabinLabel(r.cabin))}</span></div>
+        <div class="meta-line"><span>${esc(r.desk_name || 'Unassigned')}${r.operator_name ? ` · ${esc(r.operator_name)}` : ''}</span><span>Created ${fmtTime(r.created_at)}</span>${s.tracked ? `<span>${esc(`${duration(s.minutes_in_status).value} ${duration(s.minutes_in_status).unit}`)} in status · ${esc(s.threshold_minutes)} min SLA</span>` : '<span>SLA paused · with client</span>'}</div>
       </div>
-      <div class="actions">${operatorActions(r)}</div>
+      <div class="head-actions">${operatorActions(r)}</div>
+    </section>
+    <div class="warning-stack">
+      ${r.verification_status === 'UNVERIFIED' ? `<div class="warning-compact">${icon('alert')}<span><strong>Unverified sender</strong><small>Verify the agency before quoting</small></span><button class="btn sm" data-jump="travel-requirements">Review</button></div>` : ''}
+      ${r.human_review_reason ? `<div class="warning-compact">${icon('flag')}<span><strong>Human review required</strong><small>${esc(r.human_review_reason)}</small></span><button class="btn sm" data-jump="${warningTarget}">Review</button></div>` : ''}
+      ${r.requires_fare_recheck ? `<div class="warning-compact critical">${icon('alert')}<span><strong>Fare recheck required</strong><small>Revalidate price and availability before ticketing.</small></span><button class="btn sm" data-jump="booking-handoff">Review</button></div>` : ''}
+      ${(r.security_flags || []).length ? `<div class="warning-compact critical">${icon('shield')}<span><strong>Security flag</strong><small>Review the inbound message before continuing.</small></span><button class="btn sm" data-jump="conversation">Review</button></div>` : ''}
     </div>
-    ${r.human_review_reason ? `<div class="notice warn" style="margin-bottom:12px">${esc(r.human_review_reason)}</div>` : ''}
-    ${r.requires_fare_recheck ? '<div class="notice crit" style="margin-bottom:12px">Selected fare has expired – the ticketing desk must revalidate price and availability before ticketing.</div>' : ''}
-    <div class="card" style="margin-bottom:16px"><header><h2>Request journey</h2><span class="sub">${done} of ${d.journey.length} steps</span></header>
-      <div class="journey">${d.journey.map((j) => `<span class="step ${j.done ? 'done' : ''}" title="${j.at ? fmtTime(j.at) : 'pending'}"><span class="dot"></span>${esc(j.label)}</span>`).join('')}</div></div>
-    <div class="split">
-      <div class="grid" style="align-content:start">
-        ${requirementsCard(r)}
-        ${afterSalesCard(r)}
-        ${r.handoff ? handoffCard(r.handoff) : ''}
-        ${approvalCard(d)}
-        <div class="card"><header><h2>Conversation</h2><span class="sub">${d.messages.length} messages</span></header>
-          ${d.messages.map((m) => `<div class="msg ${m.direction}"><div class="meta">${badge(m.direction === 'INBOUND' ? 'Agent' : human(m.kind || 'outbound'), m.direction === 'INBOUND' ? 'ai' : 'info')} ${badge(m.channel, 'plain')} ${m.delivery_status ? badge(human(m.delivery_status), m.delivery_status) : ''} ${(m.security_flags || []).length ? badge('Injection signals', 'crit') : ''}<span>${fmtTime(m.at)}</span>${m.classification ? `<span>→ ${esc(human(m.classification.intent))} (${esc(m.classification.confidence)})</span>` : ''}</div>
-            ${m.subject ? `<div class="small" style="margin-top:6px"><strong>${esc(m.subject)}</strong></div>` : ''}<pre>${esc(m.content)}</pre></div>`).join('') || '<div class="muted">No messages</div>'}
-        </div>
+    ${journeyCard(d.journey, r.rfq_number)}
+    <div class="rfq-workspace">
+      <div class="grid primary-column">
+        ${primaryCards.join('') || requirementsCard(r)}
       </div>
-      <div class="grid" style="align-content:start">
-        ${fareDeskCard(d)}
+      <div class="grid secondary-column">
+        ${tasksCard(d.alerts)}
+        ${secondaryCards.join('')}
         ${replyCard(r)}
-        ${d.alerts.length ? `<div class="card"><header><h2>Tasks &amp; alerts</h2></header>${d.alerts.map((a) => `<div class="msg"><div class="meta">${badge(human(a.severity), a.severity)} ${badge(human(a.alert_type), 'info')} ${badge(human(a.status), a.status === 'RESOLVED' ? 'ok' : 'plain')} <span>${ago(a.created_at)}</span></div><div class="small" style="margin-top:6px">${esc(a.title)}</div></div>`).join('')}</div>` : ''}
-        <div class="card"><header><h2>Audit trail</h2><span class="sub">${d.audit.length} events</span></header>
-          <ul class="timeline">${d.audit.map((a) => `<li><span class="muted">${new Date(a.created_at).toLocaleTimeString('en-GB')}</span><span><strong>${esc(human(a.action))}</strong></span><span class="small muted">${esc(human(a.actor_type))}${a.actor_id ? ` · ${esc(a.actor_id)}` : ''}${a.metadata && a.metadata.to ? ` · ${esc(human(a.metadata.from))} → ${esc(human(a.metadata.to))}` : ''}${a.metadata && a.metadata.score !== undefined ? ` · score ${esc(a.metadata.score)} ${esc(a.metadata.level)}` : ''}</span></li>`).join('')}</ul></div>
+        ${auditCard(d.audit, r.rfq_number)}
       </div>
     </div>`);
   if (ok) wireRfq(d);
@@ -467,6 +571,34 @@ async function renderRfq(number) {
 function wireRfq(d) {
   const r = d.rfq;
   const reload = () => renderRfq(r.rfq_number).catch((e) => toast(e.message));
+  const renderDeferredContent = (details) => {
+    const conversation = details.querySelector('[data-lazy-conversation]');
+    if (conversation) conversation.innerHTML = details.open ? d.messages.map(messageHtml).join('') || '<div class="muted">No messages</div>' : '';
+    const audit = details.querySelector('[data-lazy-audit]');
+    if (audit) audit.innerHTML = details.open ? d.audit.map(auditRowHtml).join('') || '<li class="muted">No audit events</li>' : '';
+  };
+  document.querySelectorAll('[data-disclosure]').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      state.disclosures[disclosureKey(details.dataset.rfq, details.dataset.disclosure)] = details.open;
+      renderDeferredContent(details);
+      const label = details.querySelector(':scope > summary .toggle-label');
+      if (label) label.textContent = details.open ? 'Hide' : (details.dataset.closedLabel || 'View');
+      if (details.classList.contains('conversation-toggle')) {
+        details.querySelector(':scope > summary').textContent = details.open ? 'Hide full conversation' : `View all ${d.messages.length} messages`;
+      }
+    });
+    renderDeferredContent(details);
+  });
+  document.querySelectorAll('[data-jump]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = document.getElementById(button.dataset.jump);
+      if (!target) return;
+      if (target.tagName === 'DETAILS') target.open = true;
+      const parentDisclosure = target.closest('details.disclosure-card');
+      if (parentDisclosure) parentDisclosure.open = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
   const mock = document.getElementById('loadMock');
   if (mock) mock.onclick = async () => {
     const res = await post('/api/fare-desk/mock', { rfq_number: r.rfq_number });
@@ -554,28 +686,29 @@ const ALERT_ICON = { SLA_BREACH: 'clock', DESK_NOTIFICATION: 'inbox', HUMAN_REVI
 
 async function renderAlerts() {
   const nav = state.nav;
-  const rows = await api('/api/alerts');
-  const types = Array.from(new Set(rows.map((a) => a.alert_type)));
+  const severityOrder = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+  const rows = (await api('/api/alerts')).slice().sort((a, b) => (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9));
   const sev = (k) => rows.filter((a) => a.severity === k).length;
+  const severityFilters = [['all', 'All open'], ['CRITICAL', 'Critical'], ['WARNING', 'Warning'], ['INFO', 'Info']];
   const html = `
-    ${pageHead('Desk inbox', 'What each desk must do now', 'Desk notifications, human tasks, SLA breaches and security flags – resolved by an operator, never by the AI.',
-      `<div class="actions">${badge(`${sev('CRITICAL')} critical`, 'crit')}${badge(`${sev('WARNING')} warning`, 'warn')}${badge(`${sev('INFO')} info`, 'info')}</div>`)}
+    ${pageHead('Desk inbox', 'Open desk tasks', 'Prioritized operator actions, SLA breaches and review flags. Resolved history remains in the audit trail.',
+      `<div class="actions">${[['CRITICAL', 'critical', 'crit'], ['WARNING', 'warning', 'warn'], ['INFO', 'info', 'info']].filter(([key]) => sev(key) > 0).map(([key, label, tone]) => badge(`${sev(key)} ${label}`, tone)).join('')}</div>`)}
     <div class="toolbar"><div class="filters">
-      ${[['all', 'All']].concat(types.map((t) => [t, human(t)])).map(([id, label]) => `<button class="filter ${state.alertFilter === id ? 'active' : ''}" data-afilter="${esc(id)}">${esc(label)}<span class="cnt">${id === 'all' ? rows.length : rows.filter((a) => a.alert_type === id).length}</span></button>`).join('')}
+      ${severityFilters.map(([id, label]) => `<button class="filter ${state.alertFilter === id ? 'active' : ''}" data-afilter="${esc(id)}">${esc(label)}<span class="cnt">${id === 'all' ? rows.length : sev(id)}</span></button>`).join('')}
     </div></div>
     <div class="card table-card"><div class="table-wrap"><table>
       <thead><tr><th>Severity</th><th>Task</th><th>Desk</th><th>RFQ</th><th>When</th><th></th></tr></thead><tbody id="aBody"></tbody></table></div></div>`;
   if (!paint(nav, html)) return;
   const draw = () => {
-    const list = rows.filter((a) => state.alertFilter === 'all' || a.alert_type === state.alertFilter);
+    const list = rows.filter((a) => state.alertFilter === 'all' || a.severity === state.alertFilter);
     document.getElementById('aBody').innerHTML = list.map((a) => `<tr>
       <td>${badge(human(a.severity), a.severity)}</td>
       <td><div class="person"><span class="ch">${icon(ALERT_ICON[a.alert_type] || 'inbox')}</span><span class="who"><div>${esc(a.title)}</div><div class="muted">${esc(human(a.alert_type))}${a.details && a.details.kb_suggestions && a.details.kb_suggestions.length ? ` · KB: ${a.details.kb_suggestions.map((k) => esc(k.title)).join(', ')}` : ''}</div></span></div></td>
       <td>${esc(a.desk || '—')}</td>
       <td>${a.rfq_number ? `<a class="rfq-id" href="#/rfq/${esc(a.rfq_number)}">${esc(a.rfq_number)}</a>` : '<span class="muted">—</span>'}</td>
       <td class="small muted">${ago(a.created_at)}</td>
-      <td style="text-align:right"><button class="btn sm" data-resolve="${a.id}">Resolve</button></td></tr>`).join('')
-      || `<tr><td colspan="6">${emptyState('check', 'Inbox zero', 'Nothing needs an operator right now.')}</td></tr>`;
+      <td class="row-action"><button class="btn sm" data-resolve="${a.id}" aria-label="Resolve ${esc(a.title)}">Resolve</button></td></tr>`).join('')
+      || `<tr><td colspan="6">${emptyState('check', 'No open alerts', 'Nothing needs an operator right now.')}</td></tr>`;
     $view.querySelectorAll('[data-resolve]').forEach((b) => b.onclick = async () => {
       await post('/api/ops/action', { action: 'RESOLVE_ALERT', alert_id: b.dataset.resolve, operator: state.operator }).catch((e) => toast(e.message));
       renderAlerts();
@@ -593,25 +726,43 @@ async function renderAlerts() {
 // ---------------------------------------------------------------------------
 // Outbox
 // ---------------------------------------------------------------------------
+function messagePreview(content, maxLines = 7, maxChars = 520) {
+  const text = String(content || '');
+  const lines = text.split(/\r?\n/);
+  const clipped = lines.length > maxLines ? lines.slice(0, maxLines).join('\n') : text;
+  if (clipped.length > maxChars) return `${clipped.slice(0, maxChars).trimEnd()}…`;
+  return lines.length > maxLines ? `${clipped.trimEnd()}…` : clipped;
+}
+
 async function renderOutbox() {
   const nav = state.nav;
   const rows = await api('/api/outbox');
   const html = `
     ${pageHead('Outbox', 'What the agents received', state.config.demo_mode ? 'Demo mode: deliveries are simulated and recorded – exactly what would be sent by email or WhatsApp.' : 'Messages delivered through Gmail and the WhatsApp Cloud API.')}
-    ${rows.length ? `<div class="outbox">${rows.map((m, i) => `
+    ${rows.length ? `<div class="outbox">${rows.map((m, i) => {
+      const content = String(m.content || '');
+      const preview = messagePreview(content);
+      const expandable = preview !== content;
+      return `
       <div class="card mail">
         <div class="mail-head"><span class="ch">${icon(m.channel === 'whatsapp' ? 'chat' : 'mail')}</span>
-          <div class="to"><div><strong>${esc(human(m.kind || 'message'))}</strong> · <span class="muted">to ${esc(m.recipient || '—')}</span></div>
-            <div class="small muted">${fmtTime(m.sent_at)}${m.rfq_number ? ` · <a href="#/rfq/${esc(m.rfq_number)}">${esc(m.rfq_number)}</a>` : ''}</div></div>
+          <div class="to"><div><strong>${esc(human(m.kind || 'message'))}</strong></div>
+            <div class="small muted">To ${esc(m.recipient || '—')}</div></div>
           ${badge(human(m.delivery_status || 'n/a'), m.delivery_status)}</div>
-        <div class="mail-body" id="mb-${i}">${m.subject ? `<div class="mail-subject">${esc(m.subject)}</div>` : ''}<pre class="quote">${esc(m.content)}</pre></div>
-        ${String(m.content || '').length > 420 ? `<div class="mail-foot"><button class="btn sm" data-expand="${i}">Show full message</button></div>` : ''}
-      </div>`).join('')}</div>` : `<div class="card">${emptyState('send', 'Nothing sent yet', 'Acknowledgements, clarifications and approved quotes will appear here.')}</div>`}`;
+        <div class="mail-meta"><span>${fmtTime(m.sent_at)}</span>${m.rfq_number ? `<a class="rfq-id" href="#/rfq/${esc(m.rfq_number)}">${esc(m.rfq_number)}</a>` : ''}<span>${esc(human(m.channel))}</span></div>
+        <div class="mail-body" id="mb-${i}">${m.subject ? `<div class="mail-subject">${esc(m.subject)}</div>` : ''}<pre class="quote" data-mail-content="${i}">${esc(preview)}</pre></div>
+        ${expandable ? `<div class="mail-foot"><button class="btn sm" data-expand="${i}" aria-expanded="false">View full message</button></div>` : ''}
+      </div>`;
+    }).join('')}</div>` : `<div class="card">${emptyState('send', 'No outbound messages', 'Acknowledgements, clarifications and approved quotes will appear here.')}</div>`}`;
   if (!paint(nav, html)) return;
   $view.querySelectorAll('[data-expand]').forEach((b) => b.onclick = () => {
     const el = document.getElementById(`mb-${b.dataset.expand}`);
-    el.classList.toggle('open');
-    b.textContent = el.classList.contains('open') ? 'Collapse' : 'Show full message';
+    const content = el.querySelector('[data-mail-content]');
+    const open = !el.classList.contains('open');
+    el.classList.toggle('open', open);
+    content.textContent = open ? String(rows[Number(b.dataset.expand)].content || '') : messagePreview(rows[Number(b.dataset.expand)].content);
+    b.textContent = open ? 'Collapse message' : 'View full message';
+    b.setAttribute('aria-expanded', String(open));
   });
 }
 
@@ -623,7 +774,9 @@ const ACTOR_TONE = { AI: 'ai', HUMAN: 'ok', CLIENT: 'info', SYSTEM: 'plain' };
 async function renderActivity() {
   const nav = state.nav;
   const [audit, events, dead] = await Promise.all([api('/api/audit'), api('/api/events'), api('/api/dead-letters')]);
-  const auditRows = audit.map((a) => `<tr>
+  const actors = ['AI', 'HUMAN', 'CLIENT', 'SYSTEM'];
+  const filteredAudit = audit.filter((a) => state.activityActor === 'all' || a.actor_type === state.activityActor);
+  const auditRows = filteredAudit.map((a) => `<tr>
       <td class="small muted">${fmtTime(a.created_at)}</td>
       <td><strong>${esc(human(a.action))}</strong>${a.metadata && a.metadata.to ? `<div class="small muted">${esc(human(a.metadata.from))} → ${esc(human(a.metadata.to))}</div>` : ''}</td>
       <td>${badge(human(a.actor_type), ACTOR_TONE[a.actor_type] || 'plain')}${a.actor_id ? ` <span class="small muted">${esc(a.actor_id)}</span>` : ''}</td>
@@ -638,14 +791,15 @@ async function renderActivity() {
     <div class="toolbar"><div class="tabs-inline" style="margin:0">
       <button data-atab="audit" class="${state.activityTab === 'audit' ? 'active' : ''}">Business audit trail · ${audit.length}</button>
       <button data-atab="events" class="${state.activityTab === 'events' ? 'active' : ''}">Workflow events · ${events.length}</button>
-    </div></div>
+    </div>${state.activityTab === 'audit' ? `<div class="filters actor-filters">${[['all', 'All actors']].concat(actors.map((actor) => [actor, human(actor)])).map(([id, label]) => `<button class="filter ${state.activityActor === id ? 'active' : ''}" data-actor="${id}">${label}<span class="cnt">${id === 'all' ? audit.length : audit.filter((a) => a.actor_type === id).length}</span></button>`).join('')}</div>` : ''}</div>
     <div class="card table-card"><div class="table-wrap">
       ${state.activityTab === 'audit'
-        ? (audit.length ? `<table><thead><tr><th>When</th><th>Action</th><th>Actor</th><th>RFQ</th></tr></thead><tbody>${auditRows}</tbody></table>` : emptyState('activity', 'No audit entries yet', 'Actions appear here as soon as requests are processed.'))
+        ? (filteredAudit.length ? `<table><thead><tr><th>When</th><th>Action</th><th>Actor</th><th>RFQ</th></tr></thead><tbody>${auditRows}</tbody></table>` : emptyState('activity', 'No matching audit entries', 'Try another actor filter.'))
         : (events.length ? `<table><thead><tr><th>When</th><th>Workflow</th><th>Event</th><th>Status</th><th>RFQ</th><th class="num">ms</th></tr></thead><tbody>${eventRows}</tbody></table>` : emptyState('activity', 'No workflow events yet', 'Structured events are written by the n8n workflows when they process messages – send a message from the Demo simulator.'))}
     </div></div>`;
   if (!paint(nav, html)) return;
   $view.querySelectorAll('[data-atab]').forEach((b) => b.onclick = () => { state.activityTab = b.dataset.atab; renderActivity(); });
+  $view.querySelectorAll('[data-actor]').forEach((b) => b.onclick = () => { state.activityActor = b.dataset.actor; renderActivity(); });
   $view.querySelectorAll('[data-retry]').forEach((b) => b.onclick = async () => {
     await post('/api/ops/action', { action: 'RETRY_MESSAGE', message_id: b.dataset.retry, operator: state.operator }).catch((e) => toast(e.message));
     toast('Message re-queued');
@@ -661,7 +815,7 @@ async function renderSimulator() {
   if (!state.simulator) state.simulator = await api('/api/demo/scenarios');
   const { emails, whatsapp } = state.simulator;
   const ok = paint(nav, `
-    ${pageHead('Demo', 'Demo simulator', 'Sends realistic messages through the real n8n intake webhooks (Gmail and WhatsApp Cloud API formats).')}
+    ${pageHead('Test & QA tooling', 'Testing workspace', 'Run deterministic email and WhatsApp scenarios through demo intake endpoints. Available only when DEMO_MODE is enabled.')}
     ${state.config.demo_mode ? '' : '<div class="notice crit" style="margin-bottom:14px">DEMO_MODE is off – the simulator is disabled.</div>'}
     <div class="grid cols-2">
       <div class="card"><header><h2>Email scenarios</h2><span class="sub">${emails.length} scenarios</span></header><div class="grid" style="gap:12px">
@@ -758,6 +912,7 @@ async function route() {
       autoRefresh(() => renderRfq(decodeURIComponent(arg)), 8000);
     } else {
       const fn = pages[page] || renderDashboard;
+      if (page === 'queue' && arg && QUEUE_FILTERS.some(([id]) => id === arg)) state.queueFilter = arg;
       await fn();
       if (page !== 'simulator') autoRefresh(fn, page === 'queue' ? 5000 : 10000);
     }
@@ -776,11 +931,7 @@ async function refreshCounts() {
 (async () => {
   document.querySelectorAll('#tabs a[data-icon]').forEach((a) => a.insertAdjacentHTML('afterbegin', icon(a.dataset.icon)));
   state.config = await api('/api/config').catch(() => ({ demo_mode: false }));
-  document.getElementById('modeBadges').innerHTML = [
-    state.config.demo_mode ? badge('Demo mode', 'warn') : badge('Production', 'ok'),
-    badge(state.config.require_human_approval ? 'Human approval' : 'Auto-send', state.config.require_human_approval ? 'ok' : 'crit'),
-    badge(state.config.ai_provider === 'openai' ? state.config.model : 'Rules (offline)', 'ai'),
-  ].join(' ');
+  document.getElementById('modeBadges').innerHTML = `<span class="env-label">Environment</span><span class="env-summary">${state.config.demo_mode ? 'Demo' : 'Production'} · ${state.config.require_human_approval ? 'Human approval' : 'Auto-send'} · ${esc(state.config.ai_provider === 'openai' ? state.config.model : 'Rules (offline)')}</span>`;
   window.addEventListener('hashchange', route);
   route();
 })();
