@@ -302,15 +302,15 @@ function afterSalesCard(r) {
   const adults = original.adults ?? (original.requirements && original.requirements.passengers && original.requirements.passengers.adults);
   return `<div class="card"><header><h2>After-sales context</h2>${req.clarification_required ? badge('Clarification required', 'warn') : badge('Human review', 'ai')}</header>
     <dl class="kv">
-      <dt>Parent RFQ</dt><dd><a class="mono" href="#/rfq/${encodeURIComponent(req.parent_rfq_number || original.parent_rfq_number || '')}">${esc(req.parent_rfq_number || original.parent_rfq_number || 'â€”')}</a></dd>
+      <dt>Parent RFQ</dt><dd><a class="mono" href="#/rfq/${encodeURIComponent(req.parent_rfq_number || original.parent_rfq_number || '')}">${esc(req.parent_rfq_number || original.parent_rfq_number || '—')}</a></dd>
       <dt>Original route</dt><dd><span class="route">${esc(original.origin_iata || '?')} ${icon('arrow')} ${esc(original.destination_iata || '?')}</span></dd>
-      <dt>Passengers</dt><dd>${adults ?? 'â€”'} adult(s)</dd>
+      <dt>Passengers</dt><dd>${adults ?? '—'} adult(s)</dd>
       <dt>Cabin</dt><dd>${esc(cabinLabel(original.cabin))}</dd>
-      <dt>Selected option</dt><dd>${option.code ? `<strong>${esc(option.code)} Â· ${esc(option.airline || '')}</strong>${option.fare_amount ? ` Â· ${esc(option.fare_currency)} ${Number(option.fare_amount).toLocaleString('en-US')}` : ''}` : 'â€”'}</dd>
+      <dt>Selected option</dt><dd>${option.code ? `<strong>${esc(option.code)} · ${esc(option.airline || '')}</strong>${option.fare_amount ? ` · ${esc(option.fare_currency)} ${Number(option.fare_amount).toLocaleString('en-US')}` : ''}` : '—'}</dd>
       <dt>Original travel</dt><dd>${fmtDay(original.departure_date)} ${icon('arrow')} ${fmtDay(original.return_date)}</dd>
       <dt>Requested change</dt><dd>${requested.departure_date ? `Departure ${icon('arrow')} ${fmtDay(requested.departure_date)}` : ''}${requested.return_date ? `${requested.departure_date ? '<br>' : ''}Return ${icon('arrow')} ${fmtDay(requested.return_date)}` : ''}${!requested.departure_date && !requested.return_date ? 'Exact date required' : ''}</dd>
-      <dt>Client message</dt><dd>${esc(req.client_message || req.summary || 'â€”')}</dd>
-      <dt>Desk</dt><dd>${esc(r.desk_name || r.assigned_team || 'â€”')}</dd>
+      <dt>Client message</dt><dd>${esc(req.client_message || req.summary || '—')}</dd>
+      <dt>Desk</dt><dd>${esc(r.desk_name || r.assigned_team || '—')}</dd>
     </dl></div>`;
 }
 

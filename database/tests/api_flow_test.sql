@@ -12,6 +12,7 @@ DECLARE
   r jsonb; v_msg uuid; v_conv uuid; v_rfq uuid; v_quote uuid; v_new_quote uuid; v_status text; v_ok boolean; v_count int;
   v_john uuid;   -- test agent created below (independent of the demo data)
   v_orphan uuid;
+  v_ticketed uuid; v_ticketed_return uuid; v_ticketed_option uuid; v_multi_contact uuid; v_multi_first uuid;
   v_agency uuid;
 BEGIN
   INSERT INTO agencies (name, code, email_domain, priority_level) VALUES ('QA Test Agency', 'QATEST', 'qa-agency.example', 'VIP') RETURNING id INTO v_agency;
@@ -168,25 +169,100 @@ BEGIN
             AND departure_date IS NULL AND return_date IS NULL
           FROM rfqs WHERE id = (r->>'rfq_id')::uuid), 'missing parent and date are explicit';
 
-  RAISE NOTICE '15. after-sales: change request finds the ticketed booking by PNR';
-  INSERT INTO rfqs (rfq_number, agency_id, contact_id, intent, status, departure_date, booking_reference, source_channel)
-  VALUES ('OFF-RFQ-1999-000001', (SELECT agency_id FROM contacts WHERE id = v_john), v_john, 'NEW_QUOTE', 'TICKETED', current_date + 1, 'T3ST01', 'email');
-  r := of_register_inbound_message('{"channel":"email","external_message_id":"t-3","conversation_key":"t-thread-2","sender":{"email":"qa.agent@qa-agency.example"},"message":{"text":"I need to change tomorrow''s flight, PNR T3ST01."}}');
-  r := of_create_after_sales_case(jsonb_build_object('intent', 'CHANGE_REQUEST', 'contact_id', v_john, 'agency_id', (SELECT agency_id FROM contacts WHERE id = v_john),
-                                                     'message_id', r->>'message_id', 'booking_reference', 'T3ST01', 'travel_date', (current_date + 1)::text, 'summary', 'Change tomorrow''s flight', 'channel', 'email'));
+  RAISE NOTICE '15. after-sales: TICKETED change persists context without changing original dates';
+  INSERT INTO rfqs (rfq_number, agency_id, contact_id, intent, status, trip_type, cabin, origin_iata, destination_iata,
+                    departure_date, return_date, adults, children, infants, booking_reference, source_channel, requirements)
+  VALUES ('OFF-RFQ-2026-900100', v_agency, v_john, 'NEW_QUOTE', 'TICKETED', 'ROUND_TRIP', 'BUSINESS', 'DEL', 'JFK',
+          '2026-11-20', '2026-11-27', 2, 0, 0, 'T3ST01', 'email',
+          '{"intent":"NEW_QUOTE","trip_type":"ROUND_TRIP","origin":{"iata":"DEL"},"destination":{"iata":"JFK"},"departure_date":"2026-11-20","return_date":"2026-11-27","passengers":{"adults":2,"children":0,"infants":0},"cabin":"BUSINESS","missing_fields":[]}'::jsonb)
+  RETURNING id INTO v_ticketed;
+  INSERT INTO fare_options (rfq_id, batch_no, option_no, option_code, airline, cabin, fare_amount, fare_currency,
+                            baggage, change_penalty, refund_penalty, fare_valid_until, source)
+  VALUES (v_ticketed, 1, 2, 'OPT-002', 'Emirates', 'BUSINESS', 2610, 'USD', '40 kg', 'USD 200', 'USD 300', now() + interval '2 hours', 'MANUAL')
+  RETURNING id INTO v_ticketed_option;
+  UPDATE rfqs SET selected_option_id = v_ticketed_option WHERE id = v_ticketed;
+  r := of_create_after_sales_case(jsonb_build_object(
+    'intent', 'CHANGE_REQUEST', 'contact_id', v_john, 'agency_id', v_agency,
+    'booking_reference', 'T3ST01', 'requested_departure_date', '2026-11-18',
+    'clarification_required', false, 'ambiguities', '[]'::jsonb,
+    'summary', 'change dates to 18th', 'client_message', 'change dates to 18th', 'channel', 'email'));
   ASSERT NOT (r->>'created')::boolean AND r->>'status' = 'CHANGE_REQUESTED' AND r->>'booking_reference' = 'T3ST01', 'existing booking moved to CHANGE_REQUESTED';
+  ASSERT (SELECT departure_date = '2026-11-20' AND return_date = '2026-11-27'
+            AND after_sales_type = 'CHANGE' AND requires_human
+            AND requirements->>'client_message' = 'change dates to 18th'
+            AND requirements->>'requested_departure_date' = '2026-11-18'
+            AND requirements->>'requested_return_date' IS NULL
+            AND requirements->'requested_changes'->>'departure_date' = '2026-11-18'
+            AND NOT (requirements->>'clarification_required')::boolean
+            AND requirements->'original'->>'departure_date' = '2026-11-20'
+            AND requirements->'original'->>'return_date' = '2026-11-27'
+            AND requirements->'original'->'selected_option'->>'code' = 'OPT-002'
+            AND requirements->'original'->'selected_option'->>'airline' = 'Emirates'
+          FROM rfqs WHERE id = v_ticketed), 'ticketed after-sales context survives a database reload';
+
   r := of_create_after_sales_case(jsonb_build_object('intent', 'CANCELLATION', 'contact_id', v_john, 'agency_id', (SELECT agency_id FROM contacts WHERE id = v_john),
                                                      'message_id', r->>'message_id', 'booking_reference', 'ZZZ999', 'summary', 'cancel ZZZ999', 'channel', 'email'));
   ASSERT (r->>'created')::boolean AND r->>'status' = 'REFUND_REQUESTED', 'unknown booking -> new after-sales case for a human';
 
-  RAISE NOTICE '16. SLA breach alerts are deduplicated';
+  RAISE NOTICE '16. after-sales: TICKETED ambiguous change persists clarification without inventing dates';
+  PERFORM of_transition_rfq(v_ticketed, 'TICKETED', 'HUMAN', 'test', 'reset for ambiguous after-sales test');
+  r := of_create_after_sales_case(jsonb_build_object(
+    'intent', 'CHANGE_REQUEST', 'contact_id', v_john, 'agency_id', v_agency,
+    'booking_reference', 'T3ST01', 'clarification_required', true,
+    'ambiguities', jsonb_build_array('"next week" is not a specific date'),
+    'summary', 'change my flight next week', 'client_message', 'change my flight next week', 'channel', 'email'));
+  ASSERT NOT (r->>'created')::boolean AND r->>'status' = 'CHANGE_REQUESTED'
+         AND r->>'requested_departure_date' IS NULL AND r->>'requested_return_date' IS NULL
+         AND (r->>'clarification_required')::boolean, 'ambiguous ticketed request has no invented date';
+  ASSERT (SELECT departure_date = '2026-11-20' AND return_date = '2026-11-27' AND requires_human
+            AND human_review_reason LIKE 'Clarification required:%'
+            AND missing_fields @> ARRAY['requested_change_date']::text[]
+            AND requirements->>'client_message' = 'change my flight next week'
+            AND requirements->>'requested_departure_date' IS NULL
+            AND requirements->>'requested_return_date' IS NULL
+            AND (requirements->>'clarification_required')::boolean
+            AND jsonb_array_length(requirements->'ambiguities') = 1
+            AND requirements->'original'->>'departure_date' = '2026-11-20'
+            AND requirements->'original'->>'return_date' = '2026-11-27'
+          FROM rfqs WHERE id = v_ticketed), 'ambiguous context persists and original dates remain unchanged';
+
+  RAISE NOTICE '17. after-sales: TICKETED return change uses and persists the resolved return date';
+  INSERT INTO rfqs (rfq_number, agency_id, contact_id, intent, status, trip_type, cabin, origin_iata, destination_iata,
+                    departure_date, return_date, adults, booking_reference, source_channel, requirements)
+  VALUES ('OFF-RFQ-2026-900101', v_agency, v_john, 'NEW_QUOTE', 'TICKETED', 'ROUND_TRIP', 'BUSINESS', 'DEL', 'JFK',
+          '2026-11-28', '2026-12-05', 2, 'R3TRN1', 'email', '{"intent":"NEW_QUOTE","missing_fields":[]}'::jsonb)
+  RETURNING id INTO v_ticketed_return;
+  r := of_create_after_sales_case(jsonb_build_object(
+    'intent', 'CHANGE_REQUEST', 'contact_id', v_john, 'agency_id', v_agency,
+    'booking_reference', 'R3TRN1', 'requested_return_date', '2026-12-18',
+    'clarification_required', false, 'ambiguities', '[]'::jsonb,
+    'summary', 'change return to 18th', 'client_message', 'change return to 18th', 'channel', 'email'));
+  ASSERT NOT (r->>'created')::boolean AND r->>'requested_return_date' = '2026-12-18', 'resolved return date returned';
+  ASSERT (SELECT departure_date = '2026-11-28' AND return_date = '2026-12-05' AND requires_human
+            AND requirements->>'requested_return_date' = '2026-12-18'
+            AND requirements->'requested_changes'->>'return_date' = '2026-12-18'
+            AND requirements->'original'->>'return_date' = '2026-12-05'
+          FROM rfqs WHERE id = v_ticketed_return), 'return request persists without replacing original return date';
+
+  RAISE NOTICE '18. after-sales parent fallback currently chooses the earliest upcoming candidate';
+  INSERT INTO contacts (agency_id, first_name, last_name, email)
+  VALUES (v_agency, 'Multiple', 'Bookings', 'multiple.bookings@qa-agency.example') RETURNING id INTO v_multi_contact;
+  INSERT INTO rfqs (rfq_number, agency_id, contact_id, intent, status, departure_date, booking_reference, source_channel)
+  VALUES ('OFF-RFQ-2026-900102', v_agency, v_multi_contact, 'NEW_QUOTE', 'TICKETED', current_date + 10, 'MULTI1', 'email')
+  RETURNING id INTO v_multi_first;
+  INSERT INTO rfqs (rfq_number, agency_id, contact_id, intent, status, departure_date, booking_reference, source_channel)
+  VALUES ('OFF-RFQ-2026-900103', v_agency, v_multi_contact, 'NEW_QUOTE', 'TICKETED', current_date + 20, 'MULTI2', 'email');
+  r := of_find_after_sales_parent(jsonb_build_object('contact_id', v_multi_contact, 'agency_id', v_agency));
+  ASSERT (r->>'parent_rfq_id')::uuid = v_multi_first AND r->>'booking_reference' = 'MULTI1', 'documented fallback: earliest upcoming booking wins when 2+ candidates exist';
+
+  RAISE NOTICE '19. SLA breach alerts are deduplicated';
   r := of_record_sla_breaches(jsonb_build_object('breaches', jsonb_build_array(jsonb_build_object('rfq_id', v_rfq, 'status', 'BOOKING_REQUESTED', 'minutes_in_status', 9, 'threshold_minutes', 5, 'dedupe_key', 'SLA:test'))));
   ASSERT jsonb_array_length(r->'new_alerts') = 1, 'first alert';
   r := of_record_sla_breaches(jsonb_build_object('breaches', jsonb_build_array(jsonb_build_object('rfq_id', v_rfq, 'status', 'BOOKING_REQUESTED', 'minutes_in_status', 12, 'threshold_minutes', 5, 'dedupe_key', 'SLA:test'))));
   ASSERT jsonb_array_length(r->'new_alerts') = 0, 'no duplicate alert';
   ASSERT (SELECT sla_breached FROM rfqs WHERE id = v_rfq), 'flag stored';
 
-  RAISE NOTICE '17. workflow error -> retry with backoff -> dead letter after 3 attempts';
+  RAISE NOTICE '20. workflow error -> retry with backoff -> dead letter after 3 attempts';
   r := of_register_inbound_message('{"channel":"whatsapp","external_message_id":"wamid.t4","conversation_key":"447700900199","sender":{"phone":"447700900199"},"message":{"text":"hello"}}');
   v_conv := (r->>'conversation_id')::uuid;
   FOR i IN 1..3 LOOP
@@ -199,14 +275,14 @@ BEGIN
   ASSERT (SELECT processing_status FROM messages WHERE external_message_id = 'wamid.t4') = 'DEAD_LETTER', 'status DEAD_LETTER';
   ASSERT (SELECT locked_until IS NULL FROM conversations WHERE id = v_conv), 'lock released';
 
-  RAISE NOTICE '16. WhatsApp delivery receipts only move forward';
+  RAISE NOTICE '21. WhatsApp delivery receipts only move forward';
   INSERT INTO messages (conversation_id, rfq_id, channel, direction, external_message_id, content, kind, processing_status, delivery_status)
   VALUES (v_conv, v_rfq, 'whatsapp', 'OUTBOUND', 'wamid.out1', 'x', 'ACK', 'SENT', 'SENT');
   PERFORM of_update_delivery_status('{"statuses":[{"external_message_id":"wamid.out1","status":"READ"}]}');
   PERFORM of_update_delivery_status('{"statuses":[{"external_message_id":"wamid.out1","status":"DELIVERED"}]}');
   ASSERT (SELECT delivery_status FROM messages WHERE external_message_id = 'wamid.out1') = 'READ', 'no regression READ -> DELIVERED';
 
-  RAISE NOTICE '17. knowledge base search';
+  RAISE NOTICE '22. knowledge base search';
   ASSERT jsonb_array_length(of_kb_search('{"text":"what are your opening hours on weekend"}')) >= 1, 'kb hit';
 
   RAISE NOTICE 'ALL SQL API TESTS PASSED';

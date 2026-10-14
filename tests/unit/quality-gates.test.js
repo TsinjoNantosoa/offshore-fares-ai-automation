@@ -68,6 +68,16 @@ test('no secret, API key or card number anywhere in the repository', () => {
   assert.match(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8'), /^\.env$/m);
 });
 
+test('dashboard source contains no common mojibake sequences', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'dashboard', 'public', 'app.js'), 'utf8');
+  const patterns = [
+    [/\u00e2\u20ac/u, 'UTF-8 punctuation decoded as Windows-1252'],
+    [/\u00c2\u00b7/u, 'middle dot decoded with an extra lead byte'],
+    [/\u00c3(?:\u00a2|\u201a|\u00c2)/u, 'double-encoded UTF-8'],
+  ];
+  for (const [pattern, label] of patterns) assert.doesNotMatch(app, pattern, label);
+});
+
 test('generated workflows are in sync with lib/ and prompts/ (run `npm run build` after editing)', () => {
   const wf04 = workflows.find((w) => w.json.name === 'WF04_TRAVEL_REQUEST_EXTRACTOR').json;
   const code = wf04.nodes.filter((n) => n.type === 'n8n-nodes-base.code').map((n) => n.parameters.jsCode).join('\n');

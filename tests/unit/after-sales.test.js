@@ -8,6 +8,7 @@ const today = '2026-10-14';
 const parent = {
   id: '00000000-0000-0000-0000-000000000032',
   rfq_number: 'OFF-RFQ-2026-000032',
+  status: 'TICKETED',
   origin_iata: 'DEL', destination_iata: 'JFK', trip_type: 'ROUND_TRIP',
   departure_date: '2026-11-20', return_date: '2026-11-27', cabin: 'BUSINESS',
   requirements: { passengers: { adults: 2, children: 0, infants: 0 } },

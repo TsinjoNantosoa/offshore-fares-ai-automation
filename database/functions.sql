@@ -1028,6 +1028,9 @@ BEGIN
      ORDER BY updated_at DESC LIMIT 1;
   END IF;
   IF v_parent.id IS NULL AND v_contact_id IS NOT NULL THEN
+    -- TODO(after-sales-parent-ambiguity): this fallback currently selects the earliest
+    -- upcoming booking (then the most recently updated) when several candidates exist.
+    -- Future rule: 0 candidates -> clarify; 1 -> use; 2+ -> clarify and request the PNR.
     SELECT * INTO v_parent FROM rfqs
      WHERE contact_id = v_contact_id AND status IN ('TICKETED', 'TICKETING', 'BOOKING_REQUESTED')
        AND (departure_date IS NULL OR departure_date >= current_date - 1)
@@ -1066,11 +1069,39 @@ BEGIN
   END IF;
 
   IF v_related.id IS NOT NULL AND v_related.status = 'TICKETED' THEN
-    UPDATE rfqs SET intent = p->>'intent', after_sales_type = v_type, updated_at = now() WHERE id = v_related.id;
+    UPDATE rfqs SET
+      intent = p->>'intent',
+      after_sales_type = v_type,
+      requirements = coalesce(requirements, '{}'::jsonb) || jsonb_build_object(
+        'intent', p->>'intent',
+        'after_sales_type', v_type,
+        'summary', p->>'summary',
+        'client_message', coalesce(p->>'client_message', p->>'summary'),
+        'parent_rfq_id', v_related.id,
+        'parent_rfq_number', v_related.rfq_number,
+        'original', v_parent,
+        'requested_departure_date', v_requested_departure,
+        'requested_return_date', v_requested_return,
+        'requested_changes', jsonb_build_object('departure_date', v_requested_departure, 'return_date', v_requested_return),
+        'clarification_required', v_clarification,
+        'ambiguities', coalesce(p->'ambiguities', '[]'::jsonb)),
+      missing_fields = CASE
+        WHEN v_clarification THEN ARRAY(SELECT DISTINCT field FROM unnest(coalesce(missing_fields, '{}'::text[]) || ARRAY['requested_change_date']) AS u(field))
+        ELSE array_remove(coalesce(missing_fields, '{}'::text[]), 'requested_change_date')
+      END,
+      requires_human = true,
+      human_review_reason = CASE WHEN v_clarification THEN 'Clarification required: exact travel date needed' ELSE 'After-sales request requires operator review' END,
+      updated_at = now()
+    WHERE id = v_related.id;
     PERFORM of_transition_rfq(v_related.id, v_target, 'CLIENT', p->>'message_id', left(p->>'summary', 200));
     UPDATE messages SET rfq_id = v_related.id WHERE id = (p->>'message_id')::uuid;
     PERFORM of_audit(v_related.id, 'rfq', v_related.id::text, v_target, 'CLIENT', p->>'message_id',
-                     jsonb_build_object('booking_reference', coalesce(v_ref, v_related.booking_reference), 'summary', p->>'summary'));
+                     jsonb_build_object(
+                       'booking_reference', coalesce(v_ref, v_related.booking_reference),
+                       'summary', p->>'summary', 'client_message', coalesce(p->>'client_message', p->>'summary'),
+                       'requested_changes', jsonb_build_object('departure_date', v_requested_departure, 'return_date', v_requested_return),
+                       'clarification_required', v_clarification, 'ambiguities', coalesce(p->'ambiguities', '[]'::jsonb),
+                       'original', v_parent));
     RETURN jsonb_build_object('ok', true, 'rfq_id', v_related.id, 'rfq_number', v_related.rfq_number, 'created', false, 'status', v_target,
                               'booking_reference', coalesce(v_ref, v_related.booking_reference), 'travel_date', v_related.departure_date,
                               'requested_departure_date', v_requested_departure, 'requested_return_date', v_requested_return,
