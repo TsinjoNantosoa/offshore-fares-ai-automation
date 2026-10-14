@@ -48,3 +48,38 @@ test('RFQ source keeps progressive disclosure and separates demo tools', () => {
   assert.match(app, /if \(!state\.config \|\| !state\.config\.demo_mode\) return '';/);
   assert.ok(html.indexOf('/ui-policy.js') < html.indexOf('/app.js'), 'policy loads before the dashboard');
 });
+
+test('collapsed RFQ history does not render full conversation or audit content eagerly', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'dashboard', 'public', 'app.js'), 'utf8');
+  assert.match(app, /data-lazy-conversation/);
+  assert.match(app, /data-lazy-audit/);
+  assert.match(app, /renderDeferredContent/);
+  assert.match(app, /conversation\.innerHTML = details\.open/);
+  assert.match(app, /audit\.innerHTML = details\.open/);
+});
+
+test('portfolio navigation exposes actionable overview links and keyboard queue rows', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'dashboard', 'public', 'app.js'), 'utf8');
+  assert.match(app, /Travel Operations Overview/);
+  assert.match(app, /#\/queue\/approval/);
+  assert.match(app, /#\/queue\/booking/);
+  assert.match(app, /#\/queue\/review/);
+  assert.match(app, /tabindex="0" role="link"/);
+  assert.match(app, /event\.key === 'Enter' \|\| event\.key === ' '/);
+  assert.match(app, /const totalRfqs = totals\.total \?\? channelTotal/);
+});
+
+test('outbox previews defer full message text until the operator expands it', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'dashboard', 'public', 'app.js'), 'utf8');
+  assert.match(app, /function messagePreview/);
+  assert.match(app, /View full message/);
+  assert.match(app, /content\.textContent = open \?/);
+  assert.match(app, /aria-expanded="false"/);
+});
+
+test('booking and after-sales views keep safe fallbacks when historical context is incomplete', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'dashboard', 'public', 'app.js'), 'utf8');
+  assert.match(app, /\['BOOKING_REQUESTED', 'TICKETING', 'TICKETED'\]\.includes\(r\.status\) \? handoffCard/);
+  assert.match(app, /parent_booking_context/);
+  assert.match(app, /Parent booking context is required before processing/);
+});
