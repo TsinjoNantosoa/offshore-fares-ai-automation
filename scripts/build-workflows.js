@@ -934,8 +934,14 @@ workflows.push(aiWorkflow('WF04', {
 // ============================================================================
 {
   const w = new Workflow('WF15');
-  w.add(N.sticky('About WF15', '## WF15 – After-sales router\nChange / cancellation / refund requests become **human tasks** – the system never states penalties or refund amounts.\nFinds the booking (PNR or the agent\'s ticketed booking for the mentioned date) → CHANGE_REQUESTED / REFUND_REQUESTED → priority (travel < 24 h → CRITICAL) → Ticketing / Refund desk → neutral acknowledgement.', { width: 600, height: 220 }), [0, -320]);
-  w.add(Object.assign(N.trigger(), { id: '19cd0bae-db9c-4a98-a1a6-30988133c0eb' }), [0, 0]);
+  w.add({
+    parameters: { inputSource: 'passthrough' },
+    name: 'When Called By Another Workflow',
+    type: 'n8n-nodes-base.executeWorkflowTrigger',
+    typeVersion: 1.1,
+    id: '19cd0bae-db9c-4a98-a1a6-30988133c0eb',
+  }, [0, 0]);
+  w.add(Object.assign(N.sticky('About WF15', '## WF15 – After-sales router\nChange / cancellation / refund requests become **human tasks** – the system never states penalties or refund amounts.\nFinds the booking (PNR or the agent\'s ticketed booking for the mentioned date) → CHANGE_REQUESTED / REFUND_REQUESTED → priority (travel < 24 h → CRITICAL) → Ticketing / Refund desk → neutral acknowledgement.', { width: 600, height: 220 }), { id: 'ofwf150000000015-001' }), [0, -320]);
   w.add(Object.assign(N.code('Parent Lookup', body(() => {
     const ctx = $input.first().json;
     const text = `${ctx.message.subject || ''}\n${ctx.message.text}`;
@@ -1112,11 +1118,36 @@ workflows.push(aiWorkflow('WF04', {
 // ============================================================================
 // Write files
 // ============================================================================
+function validateWf15(json) {
+  if (json.name !== 'WF15_AFTER_SALES_ROUTER') return;
+  const expectedChain = [
+    'When Called By Another Workflow', 'Parent Lookup', 'Load Parent Context', 'After-Sales Details',
+    'Open After-Sales Case', 'Priority Input', 'Calculate Priority (WF07)', 'Routing Input',
+    'Route To Desk (WF09)', 'Acknowledgement', 'Send Acknowledgement (WF12)', 'Output',
+  ];
+  const triggers = json.nodes.filter((node) => node.type === 'n8n-nodes-base.executeWorkflowTrigger');
+  if (triggers.length !== 1) throw new Error(`${json.name}: expected exactly one executeWorkflowTrigger, found ${triggers.length}`);
+  const trigger = triggers[0];
+  if (json.nodes[0] !== trigger) throw new Error(`${json.name}: executeWorkflowTrigger must be the first node`);
+  if (trigger.name !== expectedChain[0] || trigger.parameters.inputSource !== 'passthrough') {
+    throw new Error(`${json.name}: invalid executeWorkflowTrigger name or inputSource`);
+  }
+  for (let i = 0; i < expectedChain.length - 1; i += 1) {
+    const actual = json.connections[expectedChain[i]] && json.connections[expectedChain[i]].main;
+    const expected = [[{ node: expectedChain[i + 1], type: 'main', index: 0 }]];
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(`${json.name}: expected ${expectedChain[i]} -> ${expectedChain[i + 1]}`);
+    }
+  }
+}
+
+const generated = workflows.map((workflow) => workflow.toJSON());
+for (const json of generated) validateWf15(json);
+
 const outDir = path.join(ROOT, 'n8n');
 fs.mkdirSync(outDir, { recursive: true });
 for (const f of fs.readdirSync(outDir)) if (/^WF\d+_.*\.json$/.test(f)) fs.unlinkSync(path.join(outDir, f));
-for (const w of workflows) {
-  const json = w.toJSON();
+for (const json of generated) {
   // sanity: every connection target exists
   const names = new Set(json.nodes.map((n) => n.name));
   for (const [from, conn] of Object.entries(json.connections)) {

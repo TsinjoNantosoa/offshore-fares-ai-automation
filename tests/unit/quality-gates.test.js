@@ -87,6 +87,7 @@ test('WF15 keeps its sub-workflow trigger, exact chain, credentials and desk rou
   const wf15 = workflows.find((w) => w.json.name === 'WF15_AFTER_SALES_ROUTER').json;
   const triggers = wf15.nodes.filter((n) => n.type === 'n8n-nodes-base.executeWorkflowTrigger');
   assert.equal(triggers.length, 1, 'exactly one executeWorkflowTrigger');
+  assert.equal(wf15.nodes[0], triggers[0], 'executeWorkflowTrigger is the first generated WF15 node');
   assert.equal(triggers[0].name, 'When Called By Another Workflow');
   assert.equal(triggers[0].id, '19cd0bae-db9c-4a98-a1a6-30988133c0eb');
   assert.equal(triggers[0].parameters.inputSource, 'passthrough');

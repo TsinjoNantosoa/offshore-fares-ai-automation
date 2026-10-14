@@ -3,6 +3,19 @@
   "name": "WF15_AFTER_SALES_ROUTER",
   "nodes": [
     {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "name": "When Called By Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "id": "19cd0bae-db9c-4a98-a1a6-30988133c0eb",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
       "name": "About WF15",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -16,19 +29,6 @@
       "position": [
         0,
         -320
-      ]
-    },
-    {
-      "name": "When Called By Another Workflow",
-      "type": "n8n-nodes-base.executeWorkflowTrigger",
-      "typeVersion": 1.1,
-      "parameters": {
-        "inputSource": "passthrough"
-      },
-      "id": "19cd0bae-db9c-4a98-a1a6-30988133c0eb",
-      "position": [
-        0,
-        0
       ]
     },
     {
